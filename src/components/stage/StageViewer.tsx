@@ -31,8 +31,6 @@ interface StageViewerProps {
   onSetlistIndexChange?: (index: number) => void;
 }
 
-const SCROLL_START_DELAY_MS = 10000; // 10 saniye bekleme süresi
-
 export const StageViewer: React.FC<StageViewerProps> = ({ 
   song: singleSong, 
   activeSetlist, 
@@ -124,6 +122,17 @@ export const StageViewer: React.FC<StageViewerProps> = ({
   const [isScrolling, setIsScrolling] = useState(false);
   const [isScrollWaitingDelay, setIsScrollWaitingDelay] = useState(false);
   const [scrollSpeed, setScrollSpeed] = useState(1);
+  // Kaydırmaya başlamadan önceki bekleme süresi (ms) — eskiden sabit 10
+  // saniyeydi ("bazen çok uzun bazen çok az" şikayeti üzerine artık
+  // ayarlanabilir ve tercih localStorage'da saklanıyor).
+  const [scrollStartDelay, setScrollStartDelay] = useState(() => {
+    const saved = localStorage.getItem('stage_scroll_start_delay');
+    return saved ? parseInt(saved, 10) : 10000;
+  });
+  const handleScrollStartDelayChange = (ms: number) => {
+    setScrollStartDelay(ms);
+    localStorage.setItem('stage_scroll_start_delay', String(ms));
+  };
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const contentWrapperRef = useRef<HTMLDivElement>(null);
   const delayTimerRef = useRef<number | null>(null);
@@ -314,7 +323,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
         setIsScrollWaitingDelay(true);
         delayTimerRef.current = window.setTimeout(() => {
           setIsScrollWaitingDelay(false);
-        }, SCROLL_START_DELAY_MS);
+        }, scrollStartDelay);
       }
     }
   }, [currentSetlistIndex, currentSong?.id]);
@@ -330,7 +339,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       if (delayTimerRef.current) clearTimeout(delayTimerRef.current);
       delayTimerRef.current = window.setTimeout(() => {
         setIsScrollWaitingDelay(false);
-      }, SCROLL_START_DELAY_MS);
+      }, scrollStartDelay);
     }
   };
 
@@ -842,7 +851,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
           >
             {isScrolling ? <Pause size={14} /> : <Play size={14} />}
             {isScrolling 
-              ? (isScrollWaitingDelay ? '10s sonra akacak...' : 'Durdur') 
+              ? (isScrollWaitingDelay ? `${Math.round(scrollStartDelay / 1000)}s sonra akacak...` : 'Durdur') 
               : 'Kaydır'}
           </button>
 
@@ -1009,6 +1018,28 @@ export const StageViewer: React.FC<StageViewerProps> = ({
                   </span>
                 )}
               </div>
+            </div>
+
+            {/* 3b. Otomatik Kaydırma Ayarları */}
+            <div style={{ background: '#18181b', padding: '10px', borderRadius: '10px', border: '1px solid #27272a', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 'bold' }}>Kaydırmaya Başlama Süresi</span>
+                <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fbbf24' }}>
+                  {scrollStartDelay === 0 ? 'Anında' : `${(scrollStartDelay / 1000).toFixed(0)} sn`}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={20000}
+                step={1000}
+                value={scrollStartDelay}
+                onChange={(e) => handleScrollStartDelayChange(Number(e.target.value))}
+                style={{ width: '100%', accentColor: '#fbbf24', cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: '10px', color: '#71717a', lineHeight: 1.4 }}>
+                "Kaydır"a bastıktan sonra sözlerin kaymaya başlaması için beklenecek süre. 0'a çekerseniz hemen başlar.
+              </span>
             </div>
 
             {/* 4. Ek Özellikler */}
