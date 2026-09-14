@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    
+    <!-- PWA & Apple iOS Standalone Ayarları -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="StagePro" />
+    <meta name="theme-color" content="#0a0a0c" />
+    <link rel="apple-touch-icon" href="/pwa-192x192.png" />
+
+    <title>Stage ChordPro</title>
+    <style>
+      /* iPad tam ekran deneyiminde kaydırma zıplamalarını engeller */
+      html, body {
+        margin: 0;
+        padding: 0;
+        background-color: #0a0a0c;
+        overscroll-behavior: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
