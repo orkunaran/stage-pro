@@ -6,7 +6,7 @@ import { DrawingCanvas } from './DrawingCanvas';
 import { QuickJumpModal } from './QuickJumpModal';
 import { 
   Edit3, ListMusic, Check, 
-  Play, Pause, Plus, Minus, PenTool, 
+  Play, Pause, PenTool, 
   Sun, SunDim, Columns2, Columns, Search, SlidersHorizontal, X 
 } from 'lucide-react';
 
@@ -824,22 +824,24 @@ export const StageViewer: React.FC<StageViewerProps> = ({
               : 'Kaydır'}
           </button>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '3px', borderLeft: '1px solid #27272a', paddingLeft: '6px' }}>
-            <button
-              onClick={() => setScrollSpeed(s => Math.max(0.2, Number((s - 0.2).toFixed(1))))}
-              style={{ background: '#27272a', color: '#fff', border: 'none', width: '24px', height: '24px', borderRadius: '4px', cursor: 'pointer' }}
-            >
-              <Minus size={12} />
-            </button>
-            <span style={{ fontSize: '11px', color: '#fbbf24', fontWeight: 'bold', minWidth: '28px', textAlign: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderLeft: '1px solid #27272a', paddingLeft: '8px' }}>
+            <span style={{ fontSize: '11px', color: '#fbbf24', fontWeight: 'bold', minWidth: '30px', textAlign: 'center' }}>
               {scrollSpeed.toFixed(1)}x
             </span>
-            <button
-              onClick={() => setScrollSpeed(s => Math.min(3.0, Number((s + 0.2).toFixed(1))))}
-              style={{ background: '#27272a', color: '#fff', border: 'none', width: '24px', height: '24px', borderRadius: '4px', cursor: 'pointer' }}
-            >
-              <Plus size={12} />
-            </button>
+            <input
+              type="range"
+              min={0.2}
+              max={3.0}
+              step={0.1}
+              value={scrollSpeed}
+              onChange={(e) => setScrollSpeed(Number(e.target.value))}
+              title="Kaydırma Hızı"
+              style={{
+                width: '90px',
+                accentColor: '#fbbf24',
+                cursor: 'pointer',
+              }}
+            />
           </div>
         </div>
       )}

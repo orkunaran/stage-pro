@@ -54,96 +54,56 @@ export const SongRenderer: React.FC<SongRendererProps> = ({
     </div>
   );
 
-  // Ardışık akor tablosu (grid) satırlarını TEK bir CSS Grid tablosunda
-  // birleştirip render eder — böylece her satırdaki ölçüler kendi içeriğine
-  // göre değil, TÜM satırlar arasında paylaşılan sütun genişliğine göre
-  // hizalanır (bir satırdaki "Em / F#m /" ölçüsü, altındaki satırdaki
-  // "G / A /" ölçüsüyle aynı sütun genişliğini paylaşır, sınırlar alt alta
-  // düzgünce hizalanır). Ek olarak her satırın kendi gridPrefix/gridSuffix'i
-  // (örn. "x2" tekrar notu) için de sabit, paylaşılan bir sütun ayrılır.
-  const renderGridRun = (gridLines: ParsedLine[], keyPrefix: string) => {
-    const maxBars = Math.max(...gridLines.map(l => (l.bars || []).length));
-    const hasAnyPrefix = gridLines.some(l => l.gridPrefix);
-    const hasAnySuffix = gridLines.some(l => l.gridSuffix);
+  // Ardışık akor tablosu (grid) satırlarını render eder. NOT: Daha önce
+  // burada satırlar arası ölçü hizalaması için sabit sütunlu bir CSS Grid
+  // kullanılıyordu — ama sabit sütun sayısı ekrana sığmadığında (özellikle
+  // dar telefon ekranlarında) taşan ölçüler alt satıra kaymak yerine
+  // EKRANIN DIŞINA taşıyordu. Bunun yerine her satır kendi içinde
+  // `flexWrap` kullanıyor: sığmayan ölçüler otomatik olarak alt satıra
+  // geçer, hiçbir şey ekran dışında kalmaz. Bunun bedeli, farklı
+  // satırlardaki ölçülerin artık piksel piksel hizalı olmaması.
+  const renderGridLine = (line: ParsedLine, key: React.Key) => (
+    <div
+      key={key}
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        columnGap: '4px',
+        rowGap: '10px',
+        marginBottom: '14px',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+        userSelect: 'none',
+        pointerEvents: 'none',
+        maxWidth: '100%',
+      }}
+    >
+      {line.gridPrefix && (
+        <span style={{ fontSize: `${fontSize * 0.6}px`, color: '#71717a', whiteSpace: 'nowrap' }}>
+          {line.gridPrefix}
+        </span>
+      )}
 
-    // Sütun düzeni: [prefix?] [bar 1..maxBars] [suffix?]. Her hücreye
-    // gridRow/gridColumn'u AÇIKÇA veriyoruz — DOM sırasına bırakılsaydı,
-    // bir satırda diğerlerinden daha AZ ölçü olduğunda CSS Grid'in
-    // otomatik yerleştirmesi bir sonraki satırın hücrelerini sola kaydırıp
-    // tüm hizalamayı bozardı.
-    const barColumnOffset = hasAnyPrefix ? 2 : 1;
-    const columns = [
-      ...(hasAnyPrefix ? ['max-content'] : []),
-      ...Array(maxBars).fill('max-content'),
-      ...(hasAnySuffix ? ['max-content'] : []),
-    ].join(' ');
+      {(line.bars || []).map((bar, barIdx) => renderGridBarCell(bar, barIdx))}
 
-    return (
-      <div
-        key={keyPrefix}
-        style={{
-          display: 'grid',
-          gridTemplateColumns: columns,
-          columnGap: '4px',
-          rowGap: '10px',
-          marginBottom: '14px',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-          userSelect: 'none',
-          pointerEvents: 'none',
-          alignItems: 'center',
-        }}
-      >
-        {gridLines.map((line, rowIdx) => {
-          const gridRow = rowIdx + 1;
-          const cells: React.ReactNode[] = [];
-
-          if (hasAnyPrefix) {
-            cells.push(
-              <span
-                key="prefix"
-                style={{ gridRow, gridColumn: 1, fontSize: `${fontSize * 0.6}px`, color: '#71717a', whiteSpace: 'nowrap' }}
-              >
-                {line.gridPrefix || ''}
-              </span>
-            );
-          }
-
-          (line.bars || []).forEach((bar, barIdx) => {
-            cells.push(
-              <div key={`bar_${barIdx}`} style={{ gridRow, gridColumn: barColumnOffset + barIdx }}>
-                {renderGridBarCell(bar, `inner_${barIdx}`)}
-              </div>
-            );
-          });
-
-          if (hasAnySuffix) {
-            cells.push(
-              <span
-                key="suffix"
-                style={{
-                  gridRow,
-                  gridColumn: barColumnOffset + maxBars,
-                  fontSize: `${fontSize * 0.65}px`,
-                  fontWeight: 'bold',
-                  color: '#71717a',
-                  background: line.gridSuffix ? '#18181b' : 'transparent',
-                  border: line.gridSuffix ? '1px solid #27272a' : 'none',
-                  borderRadius: '6px',
-                  padding: line.gridSuffix ? '3px 10px' : 0,
-                  whiteSpace: 'nowrap',
-                  justifySelf: 'start',
-                }}
-              >
-                {line.gridSuffix || ''}
-              </span>
-            );
-          }
-
-          return cells;
-        })}
-      </div>
-    );
-  };
+      {line.gridSuffix && (
+        <span
+          style={{
+            fontSize: `${fontSize * 0.65}px`,
+            fontWeight: 'bold',
+            color: '#71717a',
+            background: '#18181b',
+            border: '1px solid #27272a',
+            borderRadius: '6px',
+            padding: '3px 10px',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {line.gridSuffix}
+        </span>
+      )}
+    </div>
+  );
 
   const renderLineBlock = (lineList: ParsedLine[], keyPrefix = '') => {
     const elements: React.ReactNode[] = [];
@@ -186,24 +146,13 @@ export const SongRenderer: React.FC<SongRendererProps> = ({
       }
 
       if (line.type === 'grid') {
-        // Ölçüler (bars) ayrıştırılmışsa, ardışık grid satırlarını topla
-        // (aralarında başka türde bir satır — boş satır, söz, başlık —
-        // gelirse grup biter) ve hepsini TEK bir hizalı tabloda göster.
+        // Ölçüler (bars) ayrıştırılmışsa, taşan ölçülerin otomatik alt
+        // satıra kaymasını sağlayan (ekran dışına taşırmayan) render'ı
+        // kullan. Eski/olağandışı formatlı satırlarda (bars boşsa) eski
+        // düz metin gösterimine geri dön.
         if (line.bars && line.bars.length > 0) {
-          const gridRun: ParsedLine[] = [];
-          let runEnd = idx;
-          while (
-            runEnd < lineList.length &&
-            lineList[runEnd].type === 'grid' &&
-            lineList[runEnd].bars &&
-            (lineList[runEnd].bars as string[][]).length > 0
-          ) {
-            gridRun.push(lineList[runEnd]);
-            runEnd++;
-          }
-
-          elements.push(renderGridRun(gridRun, `${lineKey}_gridrun`));
-          idx = runEnd;
+          elements.push(renderGridLine(line, lineKey));
+          idx++;
           continue;
         }
 
@@ -260,35 +209,54 @@ export const SongRenderer: React.FC<SongRendererProps> = ({
         continue;
       }
 
-      // Akorlu satır segmentasyonu
-      const segments: { chord: string; text: string }[] = [];
-      let currentPos = 0;
-
-      if (chords[0].position > 0) {
-        segments.push({
-          chord: '',
-          text: lyricsText.slice(0, chords[0].position),
-        });
-        currentPos = chords[0].position;
+      // Akorlu satır segmentasyonu — önce KELİME aralıklarını bul, sonra
+      // her kelimenin içine düşen akorları o kelimeye göre böl. Böylece
+      // bir akor tam kelimenin ortasına denk gelse bile (örn.
+      // "gülle[Bbmaj7]rim"), o kelimenin tüm parçaları TEK bir bölünmez
+      // blok halinde gruplanır — satır kaydırma (wrap) SADECE gerçek
+      // kelime aralarında (boşluklarda) olabilir, kelimenin ortasında asla.
+      const wordRanges: [number, number][] = [];
+      const wordRegex = /\S+/g;
+      let wm: RegExpExecArray | null;
+      while ((wm = wordRegex.exec(lyricsText)) !== null) {
+        wordRanges.push([wm.index, wm.index + wm[0].length]);
+      }
+      if (wordRanges.length === 0) {
+        // Tamamen boşluktan oluşan bir "lyrics" (örn. birleştirilemeyen bir
+        // akor-sadece satırın kalıntısı) — en azından hiçbir şey kaybolmasın.
+        wordRanges.push([0, lyricsText.length]);
       }
 
-      chords.forEach((c, cIdx) => {
-        const nextPos = chords[cIdx + 1] ? chords[cIdx + 1].position : lyricsText.length;
-        const textSlice = lyricsText.slice(c.position, Math.max(c.position, nextPos));
+      type WordUnit = { segments: { chord: string; text: string }[] };
+      const wordUnits: WordUnit[] = [];
+      const leadingGap = lyricsText.slice(0, wordRanges[0][0]);
+      if (leadingGap) {
+        wordUnits.push({ segments: [{ chord: '', text: leadingGap }] });
+      }
 
-        segments.push({
-          chord: c.chord,
-          text: textSlice,
+      wordRanges.forEach(([wStart, wEnd], wIdx) => {
+        const chordsInWord = chords.filter(c => c.position >= wStart && c.position < wEnd);
+        const wordSegs: { chord: string; text: string }[] = [];
+
+        if (chordsInWord.length === 0 || chordsInWord[0].position > wStart) {
+          const pieceEnd = chordsInWord.length > 0 ? chordsInWord[0].position : wEnd;
+          wordSegs.push({ chord: '', text: lyricsText.slice(wStart, pieceEnd) });
+        }
+        chordsInWord.forEach((c, cIdx) => {
+          const pieceEnd = chordsInWord[cIdx + 1] ? chordsInWord[cIdx + 1].position : wEnd;
+          wordSegs.push({ chord: c.chord, text: lyricsText.slice(c.position, pieceEnd) });
         });
-        currentPos = nextPos;
+
+        wordUnits.push({ segments: wordSegs });
+
+        // Bu kelimeyle bir sonraki kelime arasındaki boşluk — burada satır
+        // kaydırma SERBEST (doğal kelime arası boşluk).
+        const nextStart = wordRanges[wIdx + 1] ? wordRanges[wIdx + 1][0] : lyricsText.length;
+        const gap = lyricsText.slice(wEnd, nextStart);
+        if (gap) {
+          wordUnits.push({ segments: [{ chord: '', text: gap }] });
+        }
       });
-
-      if (currentPos < lyricsText.length) {
-        segments.push({
-          chord: '',
-          text: lyricsText.slice(currentPos),
-        });
-      }
 
       elements.push(
         <div
@@ -306,44 +274,55 @@ export const SongRenderer: React.FC<SongRendererProps> = ({
             transform: 'translateZ(0)',    // GPU üzerinde tek bir katman olarak kilitler
           }}
         >
-          {segments.map((seg, sIdx) => (
+          {wordUnits.map((unit, uIdx) => (
             <div
-              key={sIdx}
+              key={uIdx}
               style={{
                 display: 'inline-flex',
-                flexDirection: 'column',
+                alignItems: 'flex-end',
                 whiteSpace: 'pre',
-                verticalAlign: 'bottom',
-                overflow: 'visible',
               }}
             >
-              {/* Akor */}
-              <span
-                style={{
-                  fontSize: `${fontSize * 0.9}px`,
-                  color: '#fbbf24',
-                  fontWeight: 'bold',
-                  height: `${fontSize * 1.15}px`,
-                  display: 'flex',
-                  alignItems: 'flex-end',
-                  textShadow: '0 0 8px rgba(251, 191, 36, 0.3)',
-                  overflow: 'visible',
-                }}
-              >
-                {seg.chord || ' '}
-              </span>
+              {unit.segments.map((seg, sIdx) => (
+                <div
+                  key={sIdx}
+                  style={{
+                    display: 'inline-flex',
+                    flexDirection: 'column',
+                    whiteSpace: 'pre',
+                    verticalAlign: 'bottom',
+                    overflow: 'visible',
+                  }}
+                >
+                  {/* Akor */}
+                  <span
+                    style={{
+                      fontSize: `${fontSize * 0.9}px`,
+                      color: '#fbbf24',
+                      fontWeight: 'bold',
+                      height: `${fontSize * 1.15}px`,
+                      display: 'flex',
+                      alignItems: 'flex-end',
+                      textShadow: '0 0 8px rgba(251, 191, 36, 0.3)',
+                      overflow: 'visible',
+                    }}
+                  >
+                    {seg.chord || ' '}
+                  </span>
 
-              {/* Hece / Söz */}
-              <span
-                style={{
-                  fontSize: `${fontSize}px`,
-                  color: '#f3f4f6',
-                  minHeight: `${fontSize}px`,
-                  overflow: 'visible',
-                }}
-              >
-                {seg.text || ' '}
-              </span>
+                  {/* Hece / Söz */}
+                  <span
+                    style={{
+                      fontSize: `${fontSize}px`,
+                      color: '#f3f4f6',
+                      minHeight: `${fontSize}px`,
+                      overflow: 'visible',
+                    }}
+                  >
+                    {seg.text || ' '}
+                  </span>
+                </div>
+              ))}
             </div>
           ))}
         </div>
