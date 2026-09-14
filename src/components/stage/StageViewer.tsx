@@ -73,6 +73,28 @@ export const StageViewer: React.FC<StageViewerProps> = ({
     return localStorage.getItem('stage_two_column') === 'true';
   });
 
+  // Ekran genişliğini canlı takip ediyoruz (döndürme/pencere yeniden
+  // boyutlandırma dahil) — "İki Sütun" görünümü dar (telefon) ekranlarda
+  // ciddi uyum sorunlarına yol açıyordu: iki sütun içerik yüksekliğine göre
+  // değil SATIR SAYISINA göre bölündüğü için, kısa bir "Intro" bloğu ile
+  // uzun bir mısra farklı sütunlarda yükseklik olarak hizasız kalıyor,
+  // ayrıca her sütuna ayrılan dar genişlikte akor tablosu (grid) ölçüleri
+  // sığmayıp taşabiliyordu. Bu yüzden dar ekranlarda kullanıcının tercihi
+  // saklı kalır ama görünüme UYGULANMAZ — ekran genişleyince (yatay mod,
+  // tablet vb.) otomatik olarak geri döner.
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+    };
+  }, []);
+  const isNarrowScreenForColumns = viewportWidth < 820;
+  const effectiveTwoColumn = isTwoColumn && !isNarrowScreenForColumns;
+
   const [tempo, setTempo] = useState(currentSong?.tempo || 100);
   const [tempoInput, setTempoInput] = useState(String(currentSong?.tempo || 100));
   const [timeSignature, setTimeSignature] = useState(currentSong?.timeSignature || '4/4');
@@ -166,7 +188,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       setContentHeight(contentWrapperRef.current.scrollHeight);
       setContentWidth(contentWrapperRef.current.scrollWidth || 900);
     }
-  }, [currentSong?.id, transpose, fontSize, isTwoColumn]);
+  }, [currentSong?.id, transpose, fontSize, effectiveTwoColumn]);
 
   // Klavye Kısayolları (Animasyonlu Şarkı Geçişi Entegre Edildi)
   useEffect(() => {
@@ -673,7 +695,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
             overflowY: 'auto', 
             overflowX: 'hidden', 
             width: '100%', 
-            maxWidth: isTwoColumn ? '1400px' : '900px', 
+            maxWidth: effectiveTwoColumn ? '1400px' : '900px', 
             margin: '0 auto', 
             padding: '16px 14px', 
             boxSizing: 'border-box', 
@@ -729,7 +751,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
               </div>
             )}
 
-            <SongRenderer lines={parsedContent} fontSize={fontSize} layoutMode="over" isTwoColumn={isTwoColumn} />
+            <SongRenderer lines={parsedContent} fontSize={fontSize} layoutMode="over" isTwoColumn={effectiveTwoColumn} />
             
             <DrawingCanvas
               initialData={currentSong?.drawingData}
@@ -981,6 +1003,11 @@ export const StageViewer: React.FC<StageViewerProps> = ({
                   {isTwoColumn ? <Columns2 size={15} /> : <Columns size={15} />}
                   {isTwoColumn ? '2 Sütun' : 'Tek Sütun'}
                 </button>
+                {isTwoColumn && isNarrowScreenForColumns && (
+                  <span style={{ fontSize: '10px', color: '#a1a1aa', lineHeight: 1.4 }}>
+                    Ekran dar olduğu için şu an tek sütun gösteriliyor — telefonu yatay çevirin ya da tablet/bilgisayarda 2 sütun otomatik uygulanır. Tercihiniz kayıtlı kaldı.
+                  </span>
+                )}
               </div>
             </div>
 
