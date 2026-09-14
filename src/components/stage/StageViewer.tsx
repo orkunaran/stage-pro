@@ -82,12 +82,21 @@ export const StageViewer: React.FC<StageViewerProps> = ({
   // tablet vb.) otomatik olarak geri döner.
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   useEffect(() => {
-    const handleResize = () => setViewportWidth(window.innerWidth);
+    let settleTimer: number | null = null;
+    const handleResize = () => {
+      setViewportWidth(window.innerWidth);
+      // Mobil tarayıcılarda `orientationchange` anında window.innerWidth
+      // bazen henüz eski (döndürme öncesi) değeri veriyor — viewport tam
+      // oturduktan kısa bir süre sonra tekrar okuyup emin oluyoruz.
+      if (settleTimer) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(() => setViewportWidth(window.innerWidth), 300);
+    };
     window.addEventListener('resize', handleResize);
     window.addEventListener('orientationchange', handleResize);
     return () => {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
+      if (settleTimer) window.clearTimeout(settleTimer);
     };
   }, []);
   const isNarrowScreenForColumns = viewportWidth < 820;
@@ -197,7 +206,15 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       setContentHeight(contentWrapperRef.current.scrollHeight);
       setContentWidth(contentWrapperRef.current.scrollWidth || 900);
     }
-  }, [currentSong?.id, transpose, fontSize, effectiveTwoColumn]);
+    // NOT: `viewportWidth` bilerek dependency listesinde — ekran
+    // döndürüldüğünde (telefon/tablet yatay-dikey) sözler yeniden
+    // sarmalanıp daha kısa/uzun bir yükseklik alıyor, ama bu ölçüm daha
+    // önce sadece şarkı/ton/punto değişince yapılıyordu. Sonuç: döndürme
+    // sonrası bu değerler eski (bir önceki yönelime ait) yükseklikte
+    // kalıyor, çizim (kalem notu) katmanı da o eski yükseklikte
+    // konumlandığı için kaydırılabilir alanın altında gereksiz boşluk
+    // oluşuyordu.
+  }, [currentSong?.id, transpose, fontSize, effectiveTwoColumn, viewportWidth]);
 
   // Klavye Kısayolları (Animasyonlu Şarkı Geçişi Entegre Edildi)
   useEffect(() => {
