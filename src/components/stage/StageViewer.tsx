@@ -202,19 +202,32 @@ export const StageViewer: React.FC<StageViewerProps> = ({
   }, []);
 
   useEffect(() => {
-    if (contentWrapperRef.current) {
-      setContentHeight(contentWrapperRef.current.scrollHeight);
-      setContentWidth(contentWrapperRef.current.scrollWidth || 900);
-    }
-    // NOT: `viewportWidth` bilerek dependency listesinde — ekran
-    // döndürüldüğünde (telefon/tablet yatay-dikey) sözler yeniden
-    // sarmalanıp daha kısa/uzun bir yükseklik alıyor, ama bu ölçüm daha
-    // önce sadece şarkı/ton/punto değişince yapılıyordu. Sonuç: döndürme
-    // sonrası bu değerler eski (bir önceki yönelime ait) yükseklikte
-    // kalıyor, çizim (kalem notu) katmanı da o eski yükseklikte
-    // konumlandığı için kaydırılabilir alanın altında gereksiz boşluk
-    // oluşuyordu.
-  }, [currentSong?.id, transpose, fontSize, effectiveTwoColumn, viewportWidth]);
+    const el = contentWrapperRef.current;
+    if (!el) return;
+
+    // NOT: Önceden bu ölçüm sadece belirli state'ler (şarkı, ton, punto,
+    // sütun modu) değişince bir useEffect ile yapılıyordu. Sorun: hangi
+    // tetikleyicilerin "boyutu etkileyebileceğini" tek tek tahmin etmek
+    // gerekiyordu ve ekran döndürme gibi bazı durumlar (özellikle iPad'de
+    // tek sütundan iki sütuna geçerken) bu listeye tam yansımayınca ölçüm
+    // eski kalıyor, kaydırılabilir alan ya gereksiz uzun (altta boşluk)
+    // ya da GEREKENDEN KISA (bazı sözler görünmüyor, sayfa "belirli bir
+    // yerde kalıyor") oluyordu. `ResizeObserver` ile bu tahmine hiç gerek
+    // kalmıyor: içerik kutusunun GERÇEK boyutu her değiştiğinde (döndürme,
+    // sütun değişimi, punto, klavye açılması, tarayıcı çubuğu vb. HER
+    // sebep) otomatik ve doğru şekilde tetiklenir.
+    const observer = new ResizeObserver(() => {
+      setContentHeight(el.scrollHeight);
+      setContentWidth(el.scrollWidth || 900);
+    });
+    observer.observe(el);
+
+    // İlk ölçüm (observer henüz tetiklenmeden önceki durum için).
+    setContentHeight(el.scrollHeight);
+    setContentWidth(el.scrollWidth || 900);
+
+    return () => observer.disconnect();
+  }, [currentSong?.id, effectiveTwoColumn]);
 
   // Klavye Kısayolları (Animasyonlu Şarkı Geçişi Entegre Edildi)
   useEffect(() => {
