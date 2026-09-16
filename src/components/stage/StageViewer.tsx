@@ -269,6 +269,13 @@ export const StageViewer: React.FC<StageViewerProps> = ({
   // Dokunmatik Jestler (Pinch Zoom ve Yavaş Swipe Geçişi)
   const touchStartXRef = useRef<number>(0);
   const touchEndXRef = useRef<number>(0);
+  // Dikey hareketi de izliyoruz — SADECE X'e bakıldığında, hızlı bir aşağı
+  // kaydırma sırasında parmağın biraz yana kayması bile (çok normal bir
+  // durum) 70px eşiğini geçip yanlışlıkla şarkı değiştirebiliyordu. Artık
+  // yatay hareket dikey hareketten BELİRGİN ŞEKİLDE baskın değilse (bkz.
+  // handleTouchEnd'deki oran kontrolü) şarkı değişimi hiç tetiklenmiyor.
+  const touchStartYRef = useRef<number>(0);
+  const touchEndYRef = useRef<number>(0);
   const pinchStartDistRef = useRef<number | null>(null);
   const initialFontSizeRef = useRef<number>(fontSize);
   const isTouchOnContentRef = useRef<boolean>(false);
@@ -289,6 +296,9 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       initialFontSizeRef.current = fontSize;
     } else if (e.touches.length === 1) {
       touchStartXRef.current = e.targetTouches[0].clientX;
+      touchEndXRef.current = e.targetTouches[0].clientX;
+      touchStartYRef.current = e.targetTouches[0].clientY;
+      touchEndYRef.current = e.targetTouches[0].clientY;
     }
   };
 
@@ -304,6 +314,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       localStorage.setItem('stage_font_size', String(targetSize));
     } else if (e.touches.length === 1) {
       touchEndXRef.current = e.targetTouches[0].clientX;
+      touchEndYRef.current = e.targetTouches[0].clientY;
     }
   };
 
@@ -312,23 +323,31 @@ export const StageViewer: React.FC<StageViewerProps> = ({
     pinchStartDistRef.current = null;
     if (!activeSetlist || isDrawingMode || isToolsModalOpen || slideDirection !== 'idle') return;
 
-    const distance = touchStartXRef.current - touchEndXRef.current;
+    const distanceX = touchStartXRef.current - touchEndXRef.current;
+    const distanceY = touchStartYRef.current - touchEndYRef.current;
 
-    // Sonraki Şarkıya Yavaş Kayarak Geç (Sola Çekiş)
-    if (distance > 70 && currentSetlistIndex < activeSetlist.items.length - 1) {
-      setSlideDirection('sliding-left');
-      setTimeout(() => {
-        changeSetlistIndex(currentSetlistIndex + 1);
-        setSlideDirection('idle');
-      }, 400); // 400ms yumuşak geçiş süresi
-    } 
-    // Önceki Şarkıya Yavaş Kayarak Geç (Sağa Çekiş)
-    else if (distance < -70 && currentSetlistIndex > 0) {
-      setSlideDirection('sliding-right');
-      setTimeout(() => {
-        changeSetlistIndex(currentSetlistIndex - 1);
-        setSlideDirection('idle');
-      }, 400);
+    // Yatay hareket, dikey hareketten en az 1.5 kat fazla olmalı ki bu bir
+    // "şarkı değiştir" jesti sayılsın. Aksi halde (dikey kaydırmaya daha
+    // yakınsa) hiçbir şey yapılmaz — doğal sayfa kaydırması devam eder.
+    const isClearlyHorizontal = Math.abs(distanceX) > Math.abs(distanceY) * 1.5;
+
+    if (isClearlyHorizontal) {
+      // Sonraki Şarkıya Yavaş Kayarak Geç (Sola Çekiş)
+      if (distanceX > 70 && currentSetlistIndex < activeSetlist.items.length - 1) {
+        setSlideDirection('sliding-left');
+        setTimeout(() => {
+          changeSetlistIndex(currentSetlistIndex + 1);
+          setSlideDirection('idle');
+        }, 400); // 400ms yumuşak geçiş süresi
+      } 
+      // Önceki Şarkıya Yavaş Kayarak Geç (Sağa Çekiş)
+      else if (distanceX < -70 && currentSetlistIndex > 0) {
+        setSlideDirection('sliding-right');
+        setTimeout(() => {
+          changeSetlistIndex(currentSetlistIndex - 1);
+          setSlideDirection('idle');
+        }, 400);
+      }
     }
 
     isTouchOnContentRef.current = false;
