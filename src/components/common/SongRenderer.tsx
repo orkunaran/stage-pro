@@ -240,32 +240,37 @@ export const SongRenderer: React.FC<SongRendererProps> = ({
 
       type WordUnit = { segments: { chord: string; text: string }[] };
       const wordUnits: WordUnit[] = [];
-      const leadingGap = lyricsText.slice(0, wordRanges[0][0]);
-      if (leadingGap) {
-        wordUnits.push({ segments: [{ chord: '', text: leadingGap }] });
-      }
 
       wordRanges.forEach(([wStart, wEnd], wIdx) => {
-        const chordsInWord = chords.filter(c => c.position >= wStart && c.position < wEnd);
+        // NOT: Bir akorun konumu (özellikle "akor-sadece satır" birleşiminden
+        // gelenlerde — bkz. chordEngine.ts) gerçek kelime aralıklarıyla tam
+        // örtüşmeyebilir; bazı akorlar iki kelime ARASINDAKİ boşluğa denk
+        // gelebilir. Önceden bu akorlar "hiçbir kelimeye ait değil" sayılıp
+        // SESSİZCE KAYBOLUYORDU. Artık her kelime, bir SONRAKİ kelimenin
+        // başlangıcına kadarki boşluğu da "yakalıyor" — böylece aralarda
+        // kalan hiçbir akor kaybolmuyor (en kötü ihtimalle kelimenin hemen
+        // sonuna, boşluk üzerine yerleşiyor ama görünür kalıyor). İlk kelime
+        // için yakalama, satırın en başına (0) kadar genişletiliyor ki
+        // baştaki girinti boşluğuna denk gelen bir akor da kaybolmasın.
+        const captureStart = wIdx === 0 ? 0 : wStart;
+        const captureEnd = wordRanges[wIdx + 1] ? wordRanges[wIdx + 1][0] : lyricsText.length;
+        const chordsInWord = chords.filter(c => c.position >= captureStart && c.position < captureEnd);
         const wordSegs: { chord: string; text: string }[] = [];
 
-        if (chordsInWord.length === 0 || chordsInWord[0].position > wStart) {
-          const pieceEnd = chordsInWord.length > 0 ? chordsInWord[0].position : wEnd;
-          wordSegs.push({ chord: '', text: lyricsText.slice(wStart, pieceEnd) });
+        if (chordsInWord.length === 0 || chordsInWord[0].position > captureStart) {
+          const pieceEnd = chordsInWord.length > 0 ? chordsInWord[0].position : captureEnd;
+          const leadText = lyricsText.slice(captureStart, pieceEnd);
+          if (leadText || wIdx === 0) {
+            wordSegs.push({ chord: '', text: leadText });
+          }
         }
         chordsInWord.forEach((c, cIdx) => {
-          const pieceEnd = chordsInWord[cIdx + 1] ? chordsInWord[cIdx + 1].position : wEnd;
+          const pieceEnd = chordsInWord[cIdx + 1] ? chordsInWord[cIdx + 1].position : captureEnd;
           wordSegs.push({ chord: c.chord, text: lyricsText.slice(c.position, pieceEnd) });
         });
 
-        wordUnits.push({ segments: wordSegs });
-
-        // Bu kelimeyle bir sonraki kelime arasındaki boşluk — burada satır
-        // kaydırma SERBEST (doğal kelime arası boşluk).
-        const nextStart = wordRanges[wIdx + 1] ? wordRanges[wIdx + 1][0] : lyricsText.length;
-        const gap = lyricsText.slice(wEnd, nextStart);
-        if (gap) {
-          wordUnits.push({ segments: [{ chord: '', text: gap }] });
+        if (wordSegs.length > 0) {
+          wordUnits.push({ segments: wordSegs });
         }
       });
 
