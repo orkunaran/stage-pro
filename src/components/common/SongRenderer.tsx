@@ -42,8 +42,8 @@ export const SongRenderer: React.FC<SongRendererProps> = ({
         alignItems: 'center',
         gap: `${fontSize * 0.4}px`,
         padding: `${fontSize * 0.15}px ${fontSize * 0.55}px`,
-        borderLeft: '2px solid #3f3f46',
-        borderRight: '2px solid #3f3f46',
+        borderLeft: '2px solid #71717a',
+        borderRight: '2px solid #71717a',
         maxWidth: '100%',
         boxSizing: 'border-box',
       }}
@@ -350,9 +350,80 @@ export const SongRenderer: React.FC<SongRendererProps> = ({
   };
 
   if (isTwoColumn) {
-    const half = Math.ceil(lines.length / 2);
-    const leftLines = lines.slice(0, half);
-    const rightLines = lines.slice(half);
+    // NOT: Önceden satırlar SAYIYA göre ikiye bölünüyordu — bu, kısa bir
+    // "Intro" bloğuyla uzun bir mısranın farklı sütunlarda yükseklik
+    // olarak hizasız kalmasına yol açıyordu (ör. iPad'de "sayfa belirli
+    // bir yerde kalıyor" şikayeti). Şimdi iki şeyi birden yapıyoruz:
+    //  1) Her satıra, gerçek render yüksekliğine yakın bir TAHMİNİ AĞIRLIK
+    //     veriyoruz (başlık, boş satır, akorlu söz, akor tablosu farklı
+    //     ağırlıklarda) — böylece bölünme SAYIYA değil YÜKSEKLİĞE göre
+    //     dengeleniyor.
+    //  2) Bölünme noktasını, toplamın yarısına en yakın BÖLÜM BAŞLIĞINA
+    //     (Verse/Chorus/vb.) "yapıştırıyoruz" — böylece bir bölüm asla
+    //     ortadan kesilmiyor, ikinci sütun her zaman yeni bir başlıkla
+    //     başlıyor.
+    const estimateWeight = (line: ParsedLine): number => {
+      if (line.type === 'comment') return 3;
+      if (line.type === 'empty') return 1;
+      if (line.type === 'grid') {
+        const barCount = (line.bars || []).length || 1;
+        // Dar bir sütunda bir sıraya kabaca 3 ölçü sığar varsayımıyla,
+        // taşan ölçülerin alt satıra kayacağını da ağırlığa yansıtıyoruz.
+        return Math.max(1, Math.ceil(barCount / 3)) * 2;
+      }
+      return (line.chords && line.chords.length > 0) ? 2 : 1;
+    };
+
+    const weights = lines.map(estimateWeight);
+    const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+    const target = totalWeight / 2;
+
+    // Bölüm başlığı satırlarının indekslerini topla — bunlar aday
+    // bölünme noktaları (bir başlık, kendinden önceki bölümün bittiği,
+    // yeni bölümün başladığı yer demektir).
+    const sectionStartIndices = lines
+      .map((line, i) => (line.type === 'comment' ? i : -1))
+      .filter(i => i > 0); // İlk satırın kendisi başlıksa bölünme noktası olamaz (sol sütun boş kalır).
+
+    let splitIndex: number;
+
+    if (sectionStartIndices.length > 0) {
+      // Kümülatif ağırlığı yarıya en yakın olan bölüm başlangıcını seç.
+      let cumulative = 0;
+      let bestIdx = sectionStartIndices[0];
+      let bestDiff = Infinity;
+      let sIdxPos = 0;
+      for (let i = 0; i < lines.length; i++) {
+        cumulative += weights[i];
+        if (sIdxPos < sectionStartIndices.length && sectionStartIndices[sIdxPos] === i + 1) {
+          const diff = Math.abs(cumulative - target);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestIdx = i + 1;
+          }
+          sIdxPos++;
+        }
+      }
+      splitIndex = bestIdx;
+    } else {
+      // Bölüm başlığı hiç yoksa, en azından ağırlığa göre dengeli böl
+      // (satır sayısına göre değil).
+      let cumulative = 0;
+      splitIndex = Math.ceil(lines.length / 2);
+      for (let i = 0; i < lines.length; i++) {
+        cumulative += weights[i];
+        if (cumulative >= target) {
+          splitIndex = i + 1;
+          break;
+        }
+      }
+    }
+
+    // Bir sütun tamamen boş kalmasın diye sınırla.
+    splitIndex = Math.max(1, Math.min(lines.length - 1, splitIndex));
+
+    const leftLines = lines.slice(0, splitIndex);
+    const rightLines = lines.slice(splitIndex);
 
     return (
       <div
