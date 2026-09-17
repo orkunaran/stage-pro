@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Song, Setlist, BandWorkspace } from './types/song';
+import type { Song, Setlist, BandWorkspace, MemberPreferences } from './types/song';
 import { SongList } from './components/library/SongList';
 import { SetlistManager } from './components/library/SetlistManager';
 import { SongEditor } from './components/editor/SongEditor';
@@ -302,6 +302,52 @@ export default function App() {
     }
   };
 
+  // Belirli bir kişinin görüntüleme tercihlerini (punto, çift sütun,
+  // kaydırma hızı/gecikmesi) günceller. Tercih o kişinin Supabase'deki
+  // kaydına yazılır — böylece HANGİ cihaza girerse girsin o kişiyi takip
+  // eder, sadece bu cihaza özel kalmaz.
+  const handleUpdateMemberPreferences = async (memberId: string, prefs: Partial<MemberPreferences>) => {
+    const ws = activeWorkspace;
+    if (!ws) return;
+
+    const updatedMembers = (ws.members || []).map(m =>
+      m.id === memberId ? { ...m, preferences: { ...m.preferences, ...prefs } } : m
+    );
+
+    setWorkspaces(prev => prev.map(w => w.id === ws.id ? { ...w, members: updatedMembers } : w));
+
+    const { error } = await (supabase.from('workspaces') as any).upsert({
+      id: ws.id,
+      name: ws.name,
+      data: { songs: ws.songs, setlists: ws.setlists, members: updatedMembers },
+      updated_at: new Date().toISOString()
+    });
+
+    if (error) {
+      console.error('Tercihler kaydedilemedi:', error.message);
+    }
+  };
+
+  // Bu cihazda "kimin görüntülediği" — grup başına ayrı hatırlanır
+  // (localStorage). Kişinin KENDİSİ değil, sadece "bu cihazda hangi
+  // kişiyim" bilgisi cihaza özeldir; tercihlerin kendisi Supabase'de
+  // kişiye bağlı olarak saklanır.
+  const [activeMemberId, setActiveMemberIdState] = useState<string | null>(null);
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    const saved = localStorage.getItem(`active_member_${activeWorkspaceId}`);
+    setActiveMemberIdState(saved || null);
+  }, [activeWorkspaceId]);
+
+  const handleSelectMember = (memberId: string | null) => {
+    setActiveMemberIdState(memberId);
+    if (memberId) {
+      localStorage.setItem(`active_member_${activeWorkspaceId}`, memberId);
+    } else {
+      localStorage.removeItem(`active_member_${activeWorkspaceId}`);
+    }
+  };
+
   // Aktif grubun PIN'ini belirler / değiştirir / kaldırır.
   // Grupta zaten bir PIN varsa, değiştirmek için doğru mevcut PIN gerekir
   // (PIN'i bilen = grup yöneticisi kabul edilir).
@@ -518,6 +564,10 @@ export default function App() {
       }}
       setlistIndex={setlistIndex}
       onSetlistIndexChange={setSetlistIndex}
+      members={activeWorkspace?.members || []}
+      activeMemberId={activeMemberId}
+      onSelectMember={handleSelectMember}
+      onUpdateMemberPreferences={handleUpdateMemberPreferences}
     />
   );
 }

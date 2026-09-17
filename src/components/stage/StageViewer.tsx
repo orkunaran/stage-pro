@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { Song, Setlist } from '../../types/song';
+import type { Song, Setlist, BandMember, MemberPreferences } from '../../types/song';
 import { getScaleNotes, parseChordPro, transposeNote, permanentlyTransposeChordPro } from '../../utils/chordEngine';
 import { SongRenderer } from '../common/SongRenderer';
 import { DrawingCanvas } from './DrawingCanvas';
@@ -29,6 +29,15 @@ interface StageViewerProps {
   //    her zaman ilk şarkıdan başlar — ikisi birbirine karışmaz.
   setlistIndex?: number;
   onSetlistIndexChange?: (index: number) => void;
+  // Kişiye özel görüntüleme tercihleri (punto, çift sütun, kaydırma hızı/
+  // gecikmesi). Bu cihazda "kimin görüntülediği" seçilince, o kişinin
+  // Supabase'de saklı tercihleri buradan okunur; değişiklik yapıldığında
+  // da yine o kişinin kaydına geri yazılır — böylece tercih HANGİ cihaza
+  // girilirse girilsin o kişiyi takip eder.
+  members?: BandMember[];
+  activeMemberId?: string | null;
+  onSelectMember?: (id: string | null) => void;
+  onUpdateMemberPreferences?: (memberId: string, prefs: Partial<MemberPreferences>) => void;
 }
 
 export const StageViewer: React.FC<StageViewerProps> = ({ 
@@ -41,6 +50,10 @@ export const StageViewer: React.FC<StageViewerProps> = ({
   onSelectSongDirectly,
   setlistIndex,
   onSetlistIndexChange,
+  members = [],
+  activeMemberId,
+  onSelectMember,
+  onUpdateMemberPreferences,
 }) => {
   // Setlist konumu artık App.tsx'ten geliyor (controlled). Prop verilmemişse
   // (örn. tekil şarkı modu) 0 kabul edilir. Değiştirmek için parent'taki
@@ -62,12 +75,20 @@ export const StageViewer: React.FC<StageViewerProps> = ({
     }
   }
 
+  // Aktif kişi (bu cihazda "kimin görüntülediği" App.tsx'te seçilir).
+  // Tercihler öncelikle bu kişinin Supabase'de saklı kaydından okunur;
+  // kişi seçilmemişse ya da o kişinin henüz bir tercihi yoksa, cihazın
+  // kendi localStorage'ına (ya da sabit varsayılana) düşülür.
+  const activeMember = members.find(m => m.id === activeMemberId) || null;
+
   const [transpose, setTranspose] = useState(0);
-  const [fontSize, setFontSize] = useState(() => {
+  const [fontSize, setFontSizeState] = useState(() => {
+    if (activeMember?.preferences?.fontSize !== undefined) return activeMember.preferences.fontSize;
     const saved = localStorage.getItem('stage_font_size');
     return saved ? parseInt(saved, 10) : 22;
   });
-  const [isTwoColumn, setIsTwoColumn] = useState(() => {
+  const [isTwoColumn, setIsTwoColumnState] = useState(() => {
+    if (activeMember?.preferences?.isTwoColumn !== undefined) return activeMember.preferences.isTwoColumn;
     return localStorage.getItem('stage_two_column') === 'true';
   });
 
@@ -130,17 +151,57 @@ export const StageViewer: React.FC<StageViewerProps> = ({
   // Otomatik Kaydırma ve Gecikme (Delay) State'leri
   const [isScrolling, setIsScrolling] = useState(false);
   const [isScrollWaitingDelay, setIsScrollWaitingDelay] = useState(false);
-  const [scrollSpeed, setScrollSpeed] = useState(1);
+  const [scrollSpeed, setScrollSpeedState] = useState(() => {
+    if (activeMember?.preferences?.scrollSpeed !== undefined) return activeMember.preferences.scrollSpeed;
+    const saved = localStorage.getItem('stage_scroll_speed');
+    return saved ? parseFloat(saved) : 1;
+  });
   // Kaydırmaya başlamadan önceki bekleme süresi (ms) — eskiden sabit 10
   // saniyeydi ("bazen çok uzun bazen çok az" şikayeti üzerine artık
-  // ayarlanabilir ve tercih localStorage'da saklanıyor).
-  const [scrollStartDelay, setScrollStartDelay] = useState(() => {
+  // ayarlanabilir ve tercih kişiye göre (Supabase, yoksa localStorage'da)
+  // saklanıyor.
+  const [scrollStartDelay, setScrollStartDelayState] = useState(() => {
+    if (activeMember?.preferences?.scrollStartDelayMs !== undefined) return activeMember.preferences.scrollStartDelayMs;
     const saved = localStorage.getItem('stage_scroll_start_delay');
     return saved ? parseInt(saved, 10) : 10000;
   });
+
+  // Seçili kişi DEĞİŞTİĞİNDE (ilk kurulumdan sonra bile) dört tercihi de o
+  // kişinin kaydından yeniden yükle — `useState`'in tembel başlatıcısı
+  // sadece bileşen ilk kurulurken çalışır, kişi sonradan değiştirilirse bu
+  // effect devreye girer.
+  useEffect(() => {
+    if (!activeMember) return;
+    if (activeMember.preferences?.fontSize !== undefined) setFontSizeState(activeMember.preferences.fontSize);
+    if (activeMember.preferences?.isTwoColumn !== undefined) setIsTwoColumnState(activeMember.preferences.isTwoColumn);
+    if (activeMember.preferences?.scrollSpeed !== undefined) setScrollSpeedState(activeMember.preferences.scrollSpeed);
+    if (activeMember.preferences?.scrollStartDelayMs !== undefined) setScrollStartDelayState(activeMember.preferences.scrollStartDelayMs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMemberId]);
+
+  // Bu dört ayardan biri değiştiğinde: cihazda localStorage'a (kişi
+  // seçilmemişse yedek olarak) yaz, kişi seçiliyse Supabase'deki kaydına
+  // da geri yaz — böylece tercih hangi cihaza girilirse girilsin o kişiyi
+  // takip eder.
+  const persistPreference = (patch: Partial<MemberPreferences>) => {
+    if (activeMemberId && onUpdateMemberPreferences) {
+      onUpdateMemberPreferences(activeMemberId, patch);
+    }
+  };
+
+  const setScrollSpeed = (updater: number | ((prev: number) => number)) => {
+    setScrollSpeedState(prev => {
+      const next = typeof updater === 'function' ? (updater as (p: number) => number)(prev) : updater;
+      localStorage.setItem('stage_scroll_speed', String(next));
+      persistPreference({ scrollSpeed: next });
+      return next;
+    });
+  };
+
   const handleScrollStartDelayChange = (ms: number) => {
-    setScrollStartDelay(ms);
+    setScrollStartDelayState(ms);
     localStorage.setItem('stage_scroll_start_delay', String(ms));
+    persistPreference({ scrollStartDelayMs: ms });
   };
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const contentWrapperRef = useRef<HTMLDivElement>(null);
@@ -186,20 +247,23 @@ export const StageViewer: React.FC<StageViewerProps> = ({
   };
 
   const toggleTwoColumn = () => {
-    setIsTwoColumn(prev => {
+    setIsTwoColumnState(prev => {
       const next = !prev;
       localStorage.setItem('stage_two_column', String(next));
+      persistPreference({ isTwoColumn: next });
       return next;
     });
   };
 
   const handleFontSizeChange = useCallback((delta: number) => {
-    setFontSize(prev => {
+    setFontSizeState(prev => {
       const next = Math.max(12, Math.min(42, prev + delta));
       localStorage.setItem('stage_font_size', String(next));
+      persistPreference({ fontSize: next });
       return next;
     });
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMemberId]);
 
   useEffect(() => {
     const el = contentWrapperRef.current;
@@ -310,7 +374,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       const diff = currentDist - pinchStartDistRef.current;
       const step = Math.round(diff / 25);
       const targetSize = Math.max(12, Math.min(42, initialFontSizeRef.current + step));
-      setFontSize(targetSize);
+      setFontSizeState(targetSize);
       localStorage.setItem('stage_font_size', String(targetSize));
     } else if (e.touches.length === 1) {
       touchEndXRef.current = e.targetTouches[0].clientX;
@@ -320,7 +384,14 @@ export const StageViewer: React.FC<StageViewerProps> = ({
 
   const handleTouchEnd = () => {
     if (!isTouchOnContentRef.current) return;
+    const wasPinching = pinchStartDistRef.current !== null;
     pinchStartDistRef.current = null;
+    if (wasPinching) {
+      // Pinch-zoom sırasında her hareket tetiklemesinde Supabase'e yazmak
+      // yerine, jest bittiğinde SADECE BİR KEZ nihai punto değerini
+      // kişinin kaydına gönderiyoruz.
+      persistPreference({ fontSize });
+    }
     if (!activeSetlist || isDrawingMode || isToolsModalOpen || slideDirection !== 'idle') return;
 
     const distanceX = touchStartXRef.current - touchEndXRef.current;
@@ -971,6 +1042,38 @@ export const StageViewer: React.FC<StageViewerProps> = ({
                 <X size={20} />
               </button>
             </div>
+
+            {/* 0. Kimsin? — kişiye özel tercihler (punto, sütun, kaydırma
+                hızı/gecikmesi) buradan seçilen kişinin Supabase kaydına
+                yazılır ve okunur; hangi cihaza girerse girsin o kişiyi
+                takip eder. */}
+            {members.length > 0 && (
+              <div style={{ background: '#18181b', padding: '12px', borderRadius: '10px', border: '1px solid #27272a' }}>
+                <div style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 'bold', marginBottom: '8px' }}>
+                  Kimsin? <span style={{ fontWeight: 'normal', color: '#71717a' }}>(görüntüleme tercihlerin bu isimle kaydedilir)</span>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {members.map(m => (
+                    <button
+                      key={m.id}
+                      onClick={() => onSelectMember && onSelectMember(m.id === activeMemberId ? null : m.id)}
+                      style={{
+                        background: m.id === activeMemberId ? '#38bdf8' : '#27272a',
+                        color: m.id === activeMemberId ? '#0a0a0c' : '#fff',
+                        border: 'none',
+                        padding: '7px 14px',
+                        borderRadius: '20px',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        fontSize: '12px',
+                      }}
+                    >
+                      {m.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* 1. Transpoze */}
             <div style={{ background: '#18181b', padding: '12px', borderRadius: '10px', border: '1px solid #27272a' }}>

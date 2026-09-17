@@ -41,3 +41,18 @@ export interface BandWorkspace {
   // ...mevcut alanlar
   members: BandMember[];
 }
+
+
+export interface MemberPreferences {
+  fontSize?: number;
+  isTwoColumn?: boolean;
+  scrollSpeed?: number;
+  scrollStartDelayMs?: number;
+}
+
+export interface BandMember {
+  id: string;
+  name: string;
+  role?: string;
+  preferences?: MemberPreferences; // yeni eklenen alan
+}
