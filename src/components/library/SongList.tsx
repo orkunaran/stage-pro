@@ -7,7 +7,7 @@ import {
   Plus, Music, Trash2, Play, ListMusic, Users, 
   Download, Upload, FolderPlus, Files, Edit3, 
   CheckSquare, Square, Share2, Menu, X,
-  UserCog, PanelLeftClose, PanelLeftOpen
+  UserCog, PanelLeftClose, PanelLeftOpen, Search, ListPlus
 } from 'lucide-react';
 
 interface SongListProps {
@@ -29,6 +29,7 @@ interface SongListProps {
   onDeleteSong: (id: string) => void;
   onDeleteSongs?: (ids: string[]) => void;
   onOpenSetlists: () => void;
+  onAddSongToSetlist?: (setlistId: string, songId: string) => void;
   onAddSong: (song: Song) => void;
   onAddSongs?: (songs: Song[]) => void;
 }
@@ -45,12 +46,14 @@ export const SongList: React.FC<SongListProps> = ({
   onUpdateWorkspaceMembers,
   pendingBandCode,
   songs,
+  setlists = [],
   onSelectSong,
   onEditSong,
   onCreateSong,
   onDeleteSong,
   onDeleteSongs,
   onOpenSetlists,
+  onAddSongToSetlist,
   onAddSong,
   onAddSongs,
 }) => {
@@ -59,6 +62,8 @@ export const SongList: React.FC<SongListProps> = ({
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [membersModalWorkspaceId, setMembersModalWorkspaceId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [setlistMenuSongId, setSetlistMenuSongId] = useState<string | null>(null);
 
   // Mobil ekran tespiti ve sol çekmece state'i
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
@@ -97,6 +102,14 @@ export const SongList: React.FC<SongListProps> = ({
 
   const activeWs = workspaces.find(w => w.id === activeWorkspaceId) || workspaces[0];
   const membersModalWorkspace = workspaces.find(w => w.id === membersModalWorkspaceId) || null;
+
+  const filteredSongs = searchQuery.trim()
+    ? songs.filter(s =>
+        s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        s.artist.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (s.baseKey && s.baseKey.toLowerCase().includes(searchQuery.toLowerCase()))
+      )
+    : songs;
 
   // `?band=KOD` linkiyle açıldıysak ve bu gruba henüz katılınmadıysa,
   // paylaşım modalını "Katıl" sekmesiyle otomatik aç.
@@ -174,10 +187,10 @@ export const SongList: React.FC<SongListProps> = ({
   };
 
   const handleSelectAll = () => {
-    if (selectedSongIds.length === songs.length) {
+    if (selectedSongIds.length === filteredSongs.length) {
       setSelectedSongIds([]);
     } else {
-      setSelectedSongIds(songs.map(s => s.id));
+      setSelectedSongIds(filteredSongs.map(s => s.id));
     }
   };
 
@@ -482,6 +495,38 @@ export const SongList: React.FC<SongListProps> = ({
           </div>
         </div>
 
+        {/* Arşiv Genelinde Arama */}
+        {songs.length > 0 && (
+          <div style={{ position: 'relative', marginBottom: '14px' }}>
+            <Search size={16} color="#71717a" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Şarkı adı, sanatçı veya ton ara..."
+              style={{
+                width: '100%',
+                background: '#121216',
+                border: '1px solid #27272a',
+                color: '#fff',
+                padding: '10px 12px 10px 38px',
+                borderRadius: '10px',
+                fontSize: '14px',
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#71717a', cursor: 'pointer', display: 'flex' }}
+              >
+                <X size={16} />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Toplu Silme Barı */}
         {songs.length > 0 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#121216', border: '1px solid #27272a', padding: '10px 14px', borderRadius: '10px', marginBottom: '14px' }}>
@@ -489,12 +534,12 @@ export const SongList: React.FC<SongListProps> = ({
               onClick={handleSelectAll}
               style={{ background: 'transparent', border: 'none', color: '#a1a1aa', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}
             >
-              {selectedSongIds.length === songs.length && songs.length > 0 ? (
+              {selectedSongIds.length === filteredSongs.length && filteredSongs.length > 0 ? (
                 <CheckSquare size={16} color="#fbbf24" />
               ) : (
                 <Square size={16} />
               )}
-              Tümü ({selectedSongIds.length}/{songs.length})
+              Tümü ({selectedSongIds.length}/{filteredSongs.length})
             </button>
 
             {selectedSongIds.length > 0 && (
@@ -514,8 +559,12 @@ export const SongList: React.FC<SongListProps> = ({
             <div style={{ textAlign: 'center', color: '#71717a', marginTop: '60px', fontSize: '14px' }}>
               Bu grupta henüz şarkı yok. Yeni şarkı ekleyin veya sol menüden ekibinizin ortak grubuna bağlanın.
             </div>
+          ) : filteredSongs.length === 0 ? (
+            <div style={{ textAlign: 'center', color: '#71717a', marginTop: '60px', fontSize: '14px' }}>
+              "{searchQuery}" ile eşleşen şarkı bulunamadı.
+            </div>
           ) : (
-            songs.map(song => {
+            filteredSongs.map(song => {
               const isSelected = selectedSongIds.includes(song.id);
               return (
                 <div
@@ -529,7 +578,8 @@ export const SongList: React.FC<SongListProps> = ({
                     flexDirection: isMobile ? 'column' : 'row',
                     justifyContent: 'space-between',
                     alignItems: isMobile ? 'stretch' : 'center',
-                    gap: isMobile ? '12px' : '16px'
+                    gap: isMobile ? '12px' : '16px',
+                    position: 'relative',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
@@ -567,6 +617,76 @@ export const SongList: React.FC<SongListProps> = ({
                     >
                       <Edit3 size={14} /> Düzenle
                     </button>
+
+                    {setlists.length > 0 && onAddSongToSetlist && (
+                      <div style={{ position: 'relative' }}>
+                        <button
+                          onClick={() => setSetlistMenuSongId(prev => prev === song.id ? null : song.id)}
+                          style={{ background: '#27272a', color: '#a78bfa', border: '1px solid #3f3f46', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                          title="Bir Setlist'e Ekle"
+                        >
+                          <ListPlus size={15} />
+                        </button>
+
+                        {setlistMenuSongId === song.id && (
+                          <>
+                            <div
+                              onClick={() => setSetlistMenuSongId(null)}
+                              style={{ position: 'fixed', inset: 0, zIndex: 40 }}
+                            />
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: 'calc(100% + 6px)',
+                                right: 0,
+                                background: '#18181b',
+                                border: '1px solid #3f3f46',
+                                borderRadius: '10px',
+                                padding: '6px',
+                                minWidth: '200px',
+                                maxHeight: '240px',
+                                overflowY: 'auto',
+                                boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+                                zIndex: 50,
+                              }}
+                            >
+                              <div style={{ fontSize: '11px', color: '#71717a', fontWeight: 'bold', padding: '6px 8px' }}>
+                                Hangi setlist'e eklensin?
+                              </div>
+                              {setlists.map(sl => (
+                                <button
+                                  key={sl.id}
+                                  onClick={() => {
+                                    onAddSongToSetlist(sl.id, song.id);
+                                    setSetlistMenuSongId(null);
+                                  }}
+                                  style={{
+                                    display: 'block',
+                                    width: '100%',
+                                    textAlign: 'left',
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: '#f3f4f6',
+                                    padding: '8px',
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    fontSize: '13px',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                  onMouseEnter={e => (e.currentTarget.style.background = '#27272a')}
+                                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                                >
+                                  {sl.name}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+
                     <button
                       onClick={() => onDeleteSong(song.id)}
                       style={{ background: '#27272a', color: '#ef4444', border: 'none', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}

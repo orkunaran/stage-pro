@@ -460,6 +460,19 @@ export default function App() {
     updateActiveWorkspace(songs, newSetlists);
   };
 
+  // Repertuvar Arşivi ekranından bir şarkıyı doğrudan (SetlistManager'ı
+  // açmaya gerek kalmadan) belirli bir setlist'e ekler.
+  const handleAddSongToSetlist = (setlistId: string, songId: string) => {
+    const targetSetlist = setlists.find(s => s.id === setlistId);
+    if (!targetSetlist) return;
+
+    const updated: Setlist = {
+      ...targetSetlist,
+      items: [...targetSetlist.items, { type: 'song', songId }],
+    };
+    handleSaveSetlist(updated);
+  };
+
   const handleDeleteSetlist = (id: string) => {
     const newSetlists = setlists.filter(s => s.id !== id);
     updateActiveWorkspace(songs, newSetlists);
@@ -502,6 +515,7 @@ export default function App() {
         onDeleteSong={handleDeleteSong}
         onDeleteSongs={handleBulkDeleteSongs}
         onOpenSetlists={() => setViewMode('setlists')}
+        onAddSongToSetlist={handleAddSongToSetlist}
         onAddSong={(newSong) => {
           const updatedSongs = [newSong, ...songs];
           updateActiveWorkspace(updatedSongs, setlists);
