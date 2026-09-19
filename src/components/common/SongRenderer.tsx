@@ -253,8 +253,17 @@ export const SongRenderer: React.FC<SongRendererProps> = ({
         // için yakalama, satırın en başına (0) kadar genişletiliyor ki
         // baştaki girinti boşluğuna denk gelen bir akor da kaybolmasın.
         const captureStart = wIdx === 0 ? 0 : wStart;
+        const isLastWord = wIdx === wordRanges.length - 1;
         const captureEnd = wordRanges[wIdx + 1] ? wordRanges[wIdx + 1][0] : lyricsText.length;
-        const chordsInWord = chords.filter(c => c.position >= captureStart && c.position < captureEnd);
+        // NOT: Son kelime için üst sınır dahil (<=) tutuluyor — satırın en
+        // sonunda, hiç söz gelmeyen bir akor (örn. "sensin[Em]") tam olarak
+        // metnin bittiği noktaya (lyricsText.length) denk gelir. Ortadaki
+        // kelimeler için sıkı "<" kullanılmaya devam ediyor; aksi halde bir
+        // sonraki kelimenin başına denk gelen bir akor HEM bu kelimeye HEM
+        // bir sonrakine yakalanıp iki kez görünürdü.
+        const chordsInWord = chords.filter(c =>
+          c.position >= captureStart && (isLastWord ? c.position <= captureEnd : c.position < captureEnd)
+        );
         const wordSegs: { chord: string; text: string }[] = [];
 
         if (chordsInWord.length === 0 || chordsInWord[0].position > captureStart) {

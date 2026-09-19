@@ -875,7 +875,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
                   marginTop: '4px',
                   fontWeight: 'bold' 
                 }}>
-                  {currentSong.artist} • Ton: <span style={{ color: '#fff' }}>{currentKey}</span> • {tempo} BPM ({timeSignature})
+                  {currentSong.artist} • Ton: <span style={{ color: '#fff' }}>{currentKey}</span> • {effectiveScaleType} ({timeSignature})
                 </div>
               </div>
             )}
