@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Song, Setlist, BandWorkspace, MemberPreferences } from './types/song';
+import type { Song, Setlist, BandWorkspace, BandMember, MemberPreferences } from './types/song';
 import { SongList } from './components/library/SongList';
 import { SetlistManager } from './components/library/SetlistManager';
 import { SongEditor } from './components/editor/SongEditor';
@@ -220,33 +220,67 @@ export default function App() {
   const songs = activeWorkspace ? activeWorkspace.songs : [];
   const setlists = activeWorkspace ? activeWorkspace.setlists : [];
 
-  const updateActiveWorkspace = async (newSongs: Song[], newSetlists: Setlist[], customName?: string) => {
-    const wsName = customName || activeWorkspace.name;
+  // Buluta GÜVENLİ kayıt: yazmadan hemen önce Supabase'den TAZE veriyi
+  // çekip, `updater` fonksiyonunun döndürdüğü değişikliği o taze verinin
+  // ÜSTÜNE uygular. Bunsuz, iki kişi aynı anda farklı şeyleri (biri şarkı,
+  // biri setlist, biri üye) düzenlerse, kim SON yazarsa onun yerel (bayat)
+  // kopyası diğerinin değişikliğini KOMPLE SİLİYORDU — bir setlist'te iki
+  // cihazdan aynı anda düzenleme yapılınca "sahneye geçince her şey
+  // kaybolmuştu" şikayetinin tam kök nedeni buydu. `updater`'a TAZE veri
+  // verildiği için, her çağıran kendi değişikliğini her zaman en güncel
+  // veri üstüne uygular, kendi bayat yerel state'ine göre değil.
+  type WorkspaceData = { songs: Song[]; setlists: Setlist[]; members: BandMember[] };
+  const saveWorkspaceChanges = async (
+    updater: (fresh: WorkspaceData) => Partial<WorkspaceData>,
+    extra?: { pin_hash?: string | null }
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!activeWorkspaceId) return { success: false, error: 'Aktif grup yok.' };
+    const wsId = activeWorkspaceId;
 
-    setWorkspaces(prev => prev.map(w => {
-      if (w.id === activeWorkspaceId) {
-        return {
-          ...w,
-          name: wsName,
-          songs: [...newSongs],
-          setlists: [...newSetlists]
+    const { data: freshRow, error: fetchError } = await (supabase.from('workspaces') as any)
+      .select('name, data')
+      .eq('id', wsId)
+      .single();
+
+    // Taze veri çekilemezse (ağ hatası vb.), yerel bilinen son duruma göre
+    // devam ediyoruz — çevrimdışı senaryoda hiç kayıt yapamamaktan iyidir,
+    // ama bu durumda çakışma riski eski koddaki gibi geri döner.
+    const fresh: WorkspaceData = fetchError || !freshRow
+      ? { songs: activeWorkspace.songs, setlists: activeWorkspace.setlists, members: activeWorkspace.members || [] }
+      : {
+          songs: freshRow.data?.songs || [],
+          setlists: freshRow.data?.setlists || [],
+          members: freshRow.data?.members || [],
         };
-      }
-      return w;
-    }));
+    const freshName = (!fetchError && freshRow) ? freshRow.name : activeWorkspace.name;
 
-    const { error } = await (supabase.from('workspaces') as any).upsert({
-      id: activeWorkspaceId,
-      name: wsName,
-      data: { songs: newSongs, setlists: newSetlists, members: activeWorkspace.members || [] },
-      updated_at: new Date().toISOString()
-    });
+    const changes = updater(fresh);
+    const merged: WorkspaceData = { ...fresh, ...changes };
+
+    setWorkspaces(prev => prev.map(w => w.id === wsId ? { ...w, name: freshName, ...merged } : w));
+
+    const upsertPayload: any = {
+      id: wsId,
+      name: freshName,
+      data: merged,
+      updated_at: new Date().toISOString(),
+    };
+    if (extra?.pin_hash !== undefined) upsertPayload.pin_hash = extra.pin_hash;
+
+    const { error } = await (supabase.from('workspaces') as any).upsert(upsertPayload);
 
     if (error) {
       console.error('Buluta kayıt hatası:', error.message);
+      return { success: false, error: error.message };
     }
+    return { success: true };
   };
 
+  // NOT: Aşağıdaki her mutasyon artık doğrudan `saveWorkspaceChanges`
+  // üzerinden, TAZE veriye göre kendi değişikliğini uyguluyor — eski
+  // `updateActiveWorkspace(yeniSongs, yeniSetlists)` ikili-parametre
+  // deseni tamamen kaldırıldı, çünkü "değişmeyen" tarafı da yerelden
+  // (bayat olabilecek) geçiyordu.
   const handleCreateWorkspace = async () => {
     const name = prompt('Yeni grup / çalışma alanı adı:');
     if (!name) return;
@@ -285,21 +319,24 @@ export default function App() {
   // Supabase'deki `data.members` alanını günceller. Şarkı/setlist verisine
   // dokunmadan sadece üyeler değişir.
   const handleUpdateWorkspaceMembers = async (workspaceId: string, members: BandWorkspace['members']) => {
-    const ws = workspaces.find(w => w.id === workspaceId);
-    if (!ws) return;
-
-    setWorkspaces(prev => prev.map(w => w.id === workspaceId ? { ...w, members } : w));
-
-    const { error } = await (supabase.from('workspaces') as any).upsert({
-      id: workspaceId,
-      name: ws.name,
-      data: { songs: ws.songs, setlists: ws.setlists, members },
-      updated_at: new Date().toISOString()
-    });
-
-    if (error) {
-      console.error('Üye listesi güncellenemedi:', error.message);
+    if (workspaceId !== activeWorkspaceId) {
+      // Nadir durum: gösterilen liste, aktif olmayan bir grubun üyeleri
+      // ise (örn. sidebar'dan farklı bir gruba tıklandı) — bu durumda
+      // taze-birleştirme kısayoluna gerek yok, tek satırlık basit upsert
+      // yeterli, çünkü kullanıcı zaten o grubu aktif olarak düzenlemiyor.
+      const ws = workspaces.find(w => w.id === workspaceId);
+      if (!ws) return;
+      setWorkspaces(prev => prev.map(w => w.id === workspaceId ? { ...w, members } : w));
+      const { error } = await (supabase.from('workspaces') as any).upsert({
+        id: workspaceId,
+        name: ws.name,
+        data: { songs: ws.songs, setlists: ws.setlists, members },
+        updated_at: new Date().toISOString()
+      });
+      if (error) console.error('Üye listesi güncellenemedi:', error.message);
+      return;
     }
+    await saveWorkspaceChanges(() => ({ members }));
   };
 
   // Belirli bir kişinin görüntüleme tercihlerini (punto, çift sütun,
@@ -307,25 +344,11 @@ export default function App() {
   // kaydına yazılır — böylece HANGİ cihaza girerse girsin o kişiyi takip
   // eder, sadece bu cihaza özel kalmaz.
   const handleUpdateMemberPreferences = async (memberId: string, prefs: Partial<MemberPreferences>) => {
-    const ws = activeWorkspace;
-    if (!ws) return;
-
-    const updatedMembers = (ws.members || []).map(m =>
-      m.id === memberId ? { ...m, preferences: { ...m.preferences, ...prefs } } : m
-    );
-
-    setWorkspaces(prev => prev.map(w => w.id === ws.id ? { ...w, members: updatedMembers } : w));
-
-    const { error } = await (supabase.from('workspaces') as any).upsert({
-      id: ws.id,
-      name: ws.name,
-      data: { songs: ws.songs, setlists: ws.setlists, members: updatedMembers },
-      updated_at: new Date().toISOString()
-    });
-
-    if (error) {
-      console.error('Tercihler kaydedilemedi:', error.message);
-    }
+    await saveWorkspaceChanges(fresh => ({
+      members: fresh.members.map(m =>
+        m.id === memberId ? { ...m, preferences: { ...m.preferences, ...prefs } } : m
+      )
+    }));
   };
 
   // Bu cihazda "kimin görüntülediği" — grup başına ayrı hatırlanır
@@ -369,16 +392,8 @@ export default function App() {
 
     setWorkspaces(prev => prev.map(w => w.id === ws.id ? { ...w, pinHash: newHash } : w));
 
-    const { error } = await (supabase.from('workspaces') as any).upsert({
-      id: ws.id,
-      name: ws.name,
-      data: { songs: ws.songs, setlists: ws.setlists, members: ws.members || [] },
-      pin_hash: newHash,
-      updated_at: new Date().toISOString()
-    });
-
-    if (error) {
-      console.error('PIN güncellenemedi:', error.message);
+    const result = await saveWorkspaceChanges(() => ({}), { pin_hash: newHash });
+    if (!result.success) {
       return { success: false, error: 'PIN kaydedilirken bir hata oluştu.' };
     }
 
@@ -428,54 +443,54 @@ export default function App() {
       rawChordPro: `{c: Verse 1}\n[C]Akorde [G]başla`,
       updatedAt: Date.now()
     };
-    const updatedSongs = [newSong, ...songs];
-    updateActiveWorkspace(updatedSongs, setlists);
+    saveWorkspaceChanges(fresh => ({ songs: [newSong, ...fresh.songs] }));
     setActiveSongId(newSong.id);
     setEditorOrigin('library');
     setViewMode('editor');
   };
 
   const handleSaveSong = (updated: Song) => {
-    const newSongs = songs.map(s => s.id === updated.id ? updated : s);
-    updateActiveWorkspace(newSongs, setlists);
+    saveWorkspaceChanges(fresh => ({
+      songs: fresh.songs.map(s => s.id === updated.id ? updated : s)
+    }));
     setViewMode(editorOrigin === 'library' ? 'library' : 'stage');
   };
 
   const handleDeleteSong = (id: string) => {
     if (!confirm('Bu şarkıyı silmek istediğinize emin misiniz?')) return;
-    const newSongs = songs.filter(s => s.id !== id);
-    updateActiveWorkspace(newSongs, setlists);
+    saveWorkspaceChanges(fresh => ({ songs: fresh.songs.filter(s => s.id !== id) }));
   };
 
   const handleBulkDeleteSongs = (ids: string[]) => {
-    const newSongs = songs.filter(s => !ids.includes(s.id));
-    updateActiveWorkspace(newSongs, setlists);
+    saveWorkspaceChanges(fresh => ({ songs: fresh.songs.filter(s => !ids.includes(s.id)) }));
   };
 
   const handleSaveSetlist = (setlist: Setlist) => {
-    const exists = setlists.some(s => s.id === setlist.id);
-    const newSetlists = exists
-      ? setlists.map(s => s.id === setlist.id ? setlist : s)
-      : [setlist, ...setlists];
-    updateActiveWorkspace(songs, newSetlists);
+    saveWorkspaceChanges(fresh => {
+      const exists = fresh.setlists.some(s => s.id === setlist.id);
+      const newSetlists = exists
+        ? fresh.setlists.map(s => s.id === setlist.id ? setlist : s)
+        : [setlist, ...fresh.setlists];
+      return { setlists: newSetlists };
+    });
   };
 
   // Repertuvar Arşivi ekranından bir şarkıyı doğrudan (SetlistManager'ı
   // açmaya gerek kalmadan) belirli bir setlist'e ekler.
   const handleAddSongToSetlist = (setlistId: string, songId: string) => {
-    const targetSetlist = setlists.find(s => s.id === setlistId);
-    if (!targetSetlist) return;
-
-    const updated: Setlist = {
-      ...targetSetlist,
-      items: [...targetSetlist.items, { type: 'song', songId }],
-    };
-    handleSaveSetlist(updated);
+    saveWorkspaceChanges(fresh => {
+      const targetSetlist = fresh.setlists.find(s => s.id === setlistId);
+      if (!targetSetlist) return {};
+      const updated: Setlist = {
+        ...targetSetlist,
+        items: [...targetSetlist.items, { type: 'song', songId }],
+      };
+      return { setlists: fresh.setlists.map(s => s.id === setlistId ? updated : s) };
+    });
   };
 
   const handleDeleteSetlist = (id: string) => {
-    const newSetlists = setlists.filter(s => s.id !== id);
-    updateActiveWorkspace(songs, newSetlists);
+    saveWorkspaceChanges(fresh => ({ setlists: fresh.setlists.filter(s => s.id !== id) }));
   };
 
   if (!isLoaded) {
@@ -517,12 +532,10 @@ export default function App() {
         onOpenSetlists={() => setViewMode('setlists')}
         onAddSongToSetlist={handleAddSongToSetlist}
         onAddSong={(newSong) => {
-          const updatedSongs = [newSong, ...songs];
-          updateActiveWorkspace(updatedSongs, setlists);
+          saveWorkspaceChanges(fresh => ({ songs: [newSong, ...fresh.songs] }));
         }}
         onAddSongs={(newSongs) => {
-          const updatedSongs = [...newSongs, ...songs];
-          updateActiveWorkspace(updatedSongs, setlists);
+          saveWorkspaceChanges(fresh => ({ songs: [...newSongs, ...fresh.songs] }));
         }}
       />
     );
