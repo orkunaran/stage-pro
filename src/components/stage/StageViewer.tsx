@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { Song, Setlist, BandMember, MemberPreferences } from '../../types/song';
-import { getScaleNotes, parseChordPro, transposeNote, permanentlyTransposeChordPro } from '../../utils/chordEngine';
+import { getScaleNotes, parseChordPro, permanentlyTransposeChordPro, transposeKey } from '../../utils/chordEngine';
 import { SongRenderer } from '../common/SongRenderer';
 import { DrawingCanvas } from './DrawingCanvas';
 import { QuickJumpModal } from './QuickJumpModal';
 import { 
   Edit3, ListMusic, Check, 
   Play, Pause, PenTool, 
-  Sun, SunDim, Columns2, Columns, Search, SlidersHorizontal, X 
+  Sun, SunDim, Columns2, Columns, Search, SlidersHorizontal, X,
+  ChevronLeft, ChevronRight, Undo2,
 } from 'lucide-react';
 
 interface StageViewerProps {
@@ -40,6 +41,29 @@ interface StageViewerProps {
   onUpdateMemberPreferences?: (memberId: string, prefs: Partial<MemberPreferences>) => void;
 }
 
+// Cihaza özel ton: her müzisyen kendi tonunu ayarlar, grubun diğer
+// üyelerini etkilemez ve şarkı başına hatırlanır. Herkes için değiştirmek
+// isteyen "Kalıcı Kaydet"i kullanır.
+const transposeStorageKey = (songId: string) => `stage_transpose_${songId}`;
+function readPersonalTranspose(songId?: string): number {
+  if (!songId) return 0;
+  try {
+    const v = parseInt(localStorage.getItem(transposeStorageKey(songId)) || '0', 10);
+    return isNaN(v) ? 0 : Math.max(-12, Math.min(12, v));
+  } catch {
+    return 0;
+  }
+}
+function writePersonalTranspose(songId: string | undefined, value: number) {
+  if (!songId) return;
+  try {
+    if (value === 0) localStorage.removeItem(transposeStorageKey(songId));
+    else localStorage.setItem(transposeStorageKey(songId), String(value));
+  } catch { /* yoksay */ }
+}
+
+const SLIDE_MS = 380;
+
 export const StageViewer: React.FC<StageViewerProps> = ({ 
   song: singleSong, 
   activeSetlist, 
@@ -63,17 +87,43 @@ export const StageViewer: React.FC<StageViewerProps> = ({
     if (onSetlistIndexChange) onSetlistIndexChange(newIndex);
   };
 
-  let currentSong = singleSong;
-  let currentBreakTitle = '';
+  const itemsCount = activeSetlist?.items.length || 0;
+  // Setlist dışından hızlı aramayla açılan şarkı: setlistteki konum korunur.
+  const [detourSongId, setDetourSongId] = useState<string | null>(null);
 
-  if (activeSetlist && activeSetlist.items.length > 0) {
-    const currentItem = activeSetlist.items[currentSetlistIndex];
+  let currentSong: Song | undefined = singleSong;
+  let currentBreakTitle = '';
+  let isMissingSong = false;
+
+  if (activeSetlist && itemsCount > 0) {
+    const currentItem = activeSetlist.items[Math.min(currentSetlistIndex, itemsCount - 1)];
+    currentSong = undefined;
     if (currentItem?.type === 'break') {
       currentBreakTitle = currentItem.breakTitle || 'Konser Arası';
     } else if (currentItem?.type === 'song') {
-      currentSong = songsList.find(s => s.id === currentItem.songId) || singleSong;
+      // Şarkı arşivden silinmişse başka bir şarkı göstermek yerine uyarı göster.
+      currentSong = songsList.find(s => s.id === currentItem.songId);
+      if (!currentSong) isMissingSong = true;
+    }
+    if (detourSongId) {
+      const detour = songsList.find(s => s.id === detourSongId);
+      if (detour) {
+        currentSong = detour;
+        currentBreakTitle = '';
+        isMissingSong = false;
+      }
     }
   }
+  const showsSong = !!currentSong && !currentBreakTitle && !isMissingSong;
+
+  // Setlist kısalırsa (ör. başka cihazdan öğe silindi) konumu sınırla.
+  useEffect(() => {
+    if (itemsCount > 0 && currentSetlistIndex > itemsCount - 1) changeSetlistIndex(itemsCount - 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemsCount, currentSetlistIndex]);
+
+  const currentSongIdRef = useRef<string | undefined>(currentSong?.id);
+  currentSongIdRef.current = currentSong?.id;
 
   // Aktif kişi (bu cihazda "kimin görüntülediği" App.tsx'te seçilir).
   // Tercihler öncelikle bu kişinin Supabase'de saklı kaydından okunur;
@@ -81,7 +131,14 @@ export const StageViewer: React.FC<StageViewerProps> = ({
   // kendi localStorage'ına (ya da sabit varsayılana) düşülür.
   const activeMember = members.find(m => m.id === activeMemberId) || null;
 
-  const [transpose, setTranspose] = useState(0);
+  const [transpose, setTransposeState] = useState(() => readPersonalTranspose(currentSong?.id));
+  const setTranspose = (updater: number | ((prev: number) => number)) => {
+    setTransposeState(prev => {
+      const next = typeof updater === 'function' ? (updater as (p: number) => number)(prev) : updater;
+      writePersonalTranspose(currentSongIdRef.current, next);
+      return next;
+    });
+  };
   const [fontSize, setFontSizeState] = useState(() => {
     if (activeMember?.preferences?.fontSize !== undefined) return activeMember.preferences.fontSize;
     const saved = localStorage.getItem('stage_font_size');
@@ -205,6 +262,11 @@ export const StageViewer: React.FC<StageViewerProps> = ({
   };
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const contentWrapperRef = useRef<HTMLDivElement>(null);
+  // Yalnızca şarkı başlığı + sözleri saran kutu: not tuvalinin boyutu buradan
+  // ölçülür (tuvalin kendisi ölçüme karışmaz; uzun şarkıdan kısa şarkıya
+  // geçince boş kaydırma alanı kalmaz).
+  const contentMeasureRef = useRef<HTMLDivElement>(null);
+  const pulseTimeoutRef = useRef<number | null>(null);
   const delayTimerRef = useRef<number | null>(null);
 
   // Wake Lock
@@ -266,8 +328,12 @@ export const StageViewer: React.FC<StageViewerProps> = ({
   }, [activeMemberId]);
 
   useEffect(() => {
-    const el = contentWrapperRef.current;
+    const el = contentMeasureRef.current;
     if (!el) return;
+    const measure = () => {
+      setContentHeight(Math.ceil(el.offsetHeight + fontSize * 5));
+      setContentWidth(Math.ceil(el.offsetWidth) || 900);
+    };
 
     // NOT: Önceden bu ölçüm sadece belirli state'ler (şarkı, ton, punto,
     // sütun modu) değişince bir useEffect ile yapılıyordu. Sorun: hangi
@@ -280,18 +346,40 @@ export const StageViewer: React.FC<StageViewerProps> = ({
     // kalmıyor: içerik kutusunun GERÇEK boyutu her değiştiğinde (döndürme,
     // sütun değişimi, punto, klavye açılması, tarayıcı çubuğu vb. HER
     // sebep) otomatik ve doğru şekilde tetiklenir.
-    const observer = new ResizeObserver(() => {
-      setContentHeight(el.scrollHeight);
-      setContentWidth(el.scrollWidth || 900);
-    });
+    const observer = new ResizeObserver(measure);
     observer.observe(el);
-
-    // İlk ölçüm (observer henüz tetiklenmeden önceki durum için).
-    setContentHeight(el.scrollHeight);
-    setContentWidth(el.scrollWidth || 900);
-
+    measure();
     return () => observer.disconnect();
-  }, [currentSong?.id, effectiveTwoColumn]);
+  }, [currentSong?.id, effectiveTwoColumn, showsSong, fontSize]);
+
+  // ---------- Setlist gezintisi (klavye, kaydırma ve düğmeler ortak) ----------
+  const goTo = (dir: 1 | -1) => {
+    if (!activeSetlist || itemsCount === 0 || slideDirection !== 'idle') return;
+    // Setlist dışı bir şarkıdaysak önce setlistteki yerimize dön.
+    if (detourSongId) {
+      setDetourSongId(null);
+      return;
+    }
+    const target = currentSetlistIndex + dir;
+    if (target < 0 || target > itemsCount - 1) return;
+    setSlideDirection(dir === 1 ? 'sliding-left' : 'sliding-right');
+    window.setTimeout(() => {
+      changeSetlistIndex(target);
+      setSlideDirection('idle');
+    }, SLIDE_MS);
+  };
+  const canGoPrev = !!activeSetlist && itemsCount > 0 && (detourSongId ? true : currentSetlistIndex > 0);
+  const canGoNext = !!activeSetlist && itemsCount > 0 && (detourSongId ? true : currentSetlistIndex < itemsCount - 1);
+  const nextItemLabel = (() => {
+    if (!activeSetlist) return '';
+    if (detourSongId) return 'Setliste dön';
+    const next = activeSetlist.items[currentSetlistIndex + 1];
+    if (!next) return '';
+    if (next.type === 'break') return next.breakTitle || 'Ara';
+    return songsList.find(s => s.id === next.songId)?.title || 'Silinmiş şarkı';
+  })();
+  const goToRef = useRef(goTo);
+  goToRef.current = goTo;
 
   // Klavye Kısayolları (Animasyonlu Şarkı Geçişi Entegre Edildi)
   useEffect(() => {
@@ -306,29 +394,17 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       if (e.code === 'Space') {
         e.preventDefault();
         toggleScrolling();
-      } else if (e.code === 'ArrowRight') {
-        if (activeSetlist && currentSetlistIndex < activeSetlist.items.length - 1 && slideDirection === 'idle') {
-          e.preventDefault();
-          setSlideDirection('sliding-left');
-          setTimeout(() => {
-            changeSetlistIndex(currentSetlistIndex + 1);
-            setSlideDirection('idle');
-          }, 350);
-        }
-      } else if (e.code === 'ArrowLeft') {
-        if (activeSetlist && currentSetlistIndex > 0 && slideDirection === 'idle') {
-          e.preventDefault();
-          setSlideDirection('sliding-right');
-          setTimeout(() => {
-            changeSetlistIndex(currentSetlistIndex - 1);
-            setSlideDirection('idle');
-          }, 350);
-        }
+      } else if (e.code === 'ArrowRight' && canGoNext) {
+        e.preventDefault();
+        goToRef.current(1);
+      } else if (e.code === 'ArrowLeft' && canGoPrev) {
+        e.preventDefault();
+        goToRef.current(-1);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeSetlist, currentSetlistIndex, isScrolling, slideDirection]);
+  }, [activeSetlist, currentSetlistIndex, isScrolling, slideDirection, canGoNext, canGoPrev]);
 
   // Dokunmatik Jestler (Pinch Zoom ve Yavaş Swipe Geçişi)
   const touchStartXRef = useRef<number>(0);
@@ -392,36 +468,20 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       // kişinin kaydına gönderiyoruz.
       persistPreference({ fontSize });
     }
+    isTouchOnContentRef.current = false;
+    // İki parmakla yakınlaştırma şarkı değiştirmesin.
+    if (wasPinching) return;
     if (!activeSetlist || isDrawingMode || isToolsModalOpen || slideDirection !== 'idle') return;
 
     const distanceX = touchStartXRef.current - touchEndXRef.current;
     const distanceY = touchStartYRef.current - touchEndYRef.current;
 
-    // Yatay hareket, dikey hareketten en az 1.5 kat fazla olmalı ki bu bir
-    // "şarkı değiştir" jesti sayılsın. Aksi halde (dikey kaydırmaya daha
-    // yakınsa) hiçbir şey yapılmaz — doğal sayfa kaydırması devam eder.
-    const isClearlyHorizontal = Math.abs(distanceX) > Math.abs(distanceY) * 1.5;
-
-    if (isClearlyHorizontal) {
-      // Sonraki Şarkıya Yavaş Kayarak Geç (Sola Çekiş)
-      if (distanceX > 70 && currentSetlistIndex < activeSetlist.items.length - 1) {
-        setSlideDirection('sliding-left');
-        setTimeout(() => {
-          changeSetlistIndex(currentSetlistIndex + 1);
-          setSlideDirection('idle');
-        }, 400); // 400ms yumuşak geçiş süresi
-      } 
-      // Önceki Şarkıya Yavaş Kayarak Geç (Sağa Çekiş)
-      else if (distanceX < -70 && currentSetlistIndex > 0) {
-        setSlideDirection('sliding-right');
-        setTimeout(() => {
-          changeSetlistIndex(currentSetlistIndex - 1);
-          setSlideDirection('idle');
-        }, 400);
-      }
-    }
-
-    isTouchOnContentRef.current = false;
+    // Yalnızca belirgin (en az 80 px) ve ağırlıklı olarak YATAY bir kaydırma
+    // şarkı değiştirir: yatay hareket dikeyin en az 2 katı olmalı. Sözleri
+    // aşağı kaydırırken eğik giden parmak şarkıyı değiştirmez.
+    if (Math.abs(distanceX) < 80 || Math.abs(distanceX) <= Math.abs(distanceY) * 2) return;
+    if (distanceX > 0 && canGoNext) goTo(1);
+    else if (distanceX < 0 && canGoPrev) goTo(-1);
   };
 
   // Şarkı Değiştiğinde Çalışacak Mantık
@@ -431,14 +491,14 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       setTempo(songTempo);
       setTempoInput(String(songTempo));
       setTimeSignature(currentSong.timeSignature || '4/4');
-      setTranspose(0);
+      setTransposeState(readPersonalTranspose(currentSong.id));
       setIsDrawingMode(false);
 
       if (scrollContainerRef.current) {
         scrollContainerRef.current.scrollTop = 0;
       }
 
-      if (isScrolling && !currentBreakTitle) {
+      if (isScrolling && showsSong) {
         if (delayTimerRef.current) clearTimeout(delayTimerRef.current);
         setIsScrollWaitingDelay(true);
         delayTimerRef.current = window.setTimeout(() => {
@@ -446,7 +506,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
         }, scrollStartDelay);
       }
     }
-  }, [currentSetlistIndex, currentSong?.id]);
+  }, [currentSetlistIndex, currentSong?.id, detourSongId]);
 
   const toggleScrolling = () => {
     if (isScrolling) {
@@ -471,14 +531,17 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       return;
     }
     const intervalMs = (60 / tempo) * 1000;
-    const timer = setInterval(() => {
+    const timer = window.setInterval(() => {
       setCurrentBeat(prev => (prev + 1) % beatsPerMeasure);
       setIsPulseActive(true);
-      const pulseTimeout = setTimeout(() => setIsPulseActive(false), 140);
-      return () => clearTimeout(pulseTimeout);
+      if (pulseTimeoutRef.current) clearTimeout(pulseTimeoutRef.current);
+      pulseTimeoutRef.current = window.setTimeout(() => setIsPulseActive(false), 140);
     }, intervalMs);
 
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      if (pulseTimeoutRef.current) clearTimeout(pulseTimeoutRef.current);
+    };
   }, [isMetronomeOn, tempo, beatsPerMeasure]);
 
   const handleTap = useCallback(() => {
@@ -517,32 +580,33 @@ export const StageViewer: React.FC<StageViewerProps> = ({
     setTempoInput(String(val));
   };
 
-  // Otomatik Kaydırma Motoru
+  // Otomatik Kaydırma Motoru — hız SANİYE başına piksel olarak hesaplanır;
+  // 60 Hz telefon ile 120 Hz iPad aynı hızda kaydırır (eskiden kare başına
+  // hesaplandığı için yüksek tazeleme hızlı ekranlarda iki kat hızlıydı).
   useEffect(() => {
-    let animationId: number;
-    let accumulatedScroll = 0;
+    if (!isScrolling || isScrollWaitingDelay || !showsSong) return;
+    let animationId = 0;
+    let last: number | null = null;
+    let accumulated = 0;
+    const pxPerSecond = ((tempo * 0.3) / 100) * scrollSpeed * 60;
 
-    const scroll = () => {
-      if (currentBreakTitle) return;
-
-      if (scrollContainerRef.current && isScrolling && !isScrollWaitingDelay) {
-        const step = ((tempo * 0.3) / 100) * scrollSpeed;
-        accumulatedScroll += step;
-
-        if (accumulatedScroll >= 1) {
-          const pixelsToScroll = Math.floor(accumulatedScroll);
-          scrollContainerRef.current.scrollTop += pixelsToScroll;
-          accumulatedScroll -= pixelsToScroll;
-        }
-        animationId = requestAnimationFrame(scroll);
+    const step = (ts: number) => {
+      const el = scrollContainerRef.current;
+      if (!el) return;
+      if (last === null) last = ts;
+      const dt = Math.min(ts - last, 100);
+      last = ts;
+      accumulated += (pxPerSecond * dt) / 1000;
+      if (accumulated >= 1) {
+        const px = Math.floor(accumulated);
+        el.scrollTop += px;
+        accumulated -= px;
       }
+      animationId = requestAnimationFrame(step);
     };
-
-    if (isScrolling && !isScrollWaitingDelay) {
-      animationId = requestAnimationFrame(scroll);
-    }
+    animationId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(animationId);
-  }, [isScrolling, isScrollWaitingDelay, scrollSpeed, tempo, currentBreakTitle]);
+  }, [isScrolling, isScrollWaitingDelay, scrollSpeed, tempo, showsSong]);
 
   const hasChanges = Boolean(currentSong && (transpose !== 0 || tempo !== currentSong.tempo));
 
@@ -553,11 +617,8 @@ export const StageViewer: React.FC<StageViewerProps> = ({
     let newRawChordPro = currentSong.rawChordPro;
 
     if (transpose !== 0) {
-      const baseNoteOnly = currentSong.baseKey ? currentSong.baseKey.replace('m', '').replace('M', '') : 'A';
-      const isMinor = currentSong.baseKey ? currentSong.baseKey.includes('m') : true;
-      const newRoot = transposeNote(baseNoteOnly, transpose);
-      newBaseKey = `${newRoot}${isMinor ? 'm' : ''}`;
-      newRawChordPro = permanentlyTransposeChordPro(currentSong.rawChordPro, transpose);
+      newBaseKey = keyInfo.name;
+      newRawChordPro = permanentlyTransposeChordPro(currentSong.rawChordPro, transpose, keyInfo.preferFlat);
     }
 
     const updatedSong: Song = {
@@ -582,14 +643,13 @@ export const StageViewer: React.FC<StageViewerProps> = ({
     });
   };
 
-  const baseNoteOnly = currentSong?.baseKey ? currentSong.baseKey.replace('m', '').replace('M', '') : 'A';
-  const isMinor = currentSong?.baseKey ? currentSong.baseKey.includes('m') : true;
-  const transposedRoot = transposeNote(baseNoteOnly, transpose);
-  const currentKey = `${transposedRoot}${isMinor ? 'm' : ''}`;
-  
-  const effectiveScaleType = currentSong?.scaleType || (isMinor ? 'Aeolian (Minor)' : 'Ionian (Major)');
-  const currentScale = getScaleNotes(transposedRoot, effectiveScaleType);
-  const parsedContent = currentSong ? parseChordPro(currentSong.rawChordPro, transpose) : [];
+  // Hedef ton bemollü bir tonsa (F, Bb, Dm, Gm...) akorlar da bemolle yazılır.
+  const keyInfo = transposeKey(currentSong?.baseKey, transpose);
+  const currentKey = currentSong ? keyInfo.name : '';
+
+  const effectiveScaleType = currentSong?.scaleType || (keyInfo.isMinor ? 'Aeolian (Minor)' : 'Ionian (Major)');
+  const currentScale = getScaleNotes(keyInfo.root, effectiveScaleType);
+  const parsedContent = showsSong && currentSong ? parseChordPro(currentSong.rawChordPro, transpose, keyInfo.preferFlat) : [];
 
   const beatColor = currentBeat === 0 ? '#fbbf24' : '#ef4444';
 
@@ -662,16 +722,16 @@ export const StageViewer: React.FC<StageViewerProps> = ({
               borderRadius: '6px', 
               border: '1px solid #3f3f46' 
             }}>
-              #{currentSetlistIndex + 1}/{activeSetlist.items.length}
+              {detourSongId ? 'Setlist dışı' : `#${Math.min(currentSetlistIndex, Math.max(itemsCount - 1, 0)) + 1}/${itemsCount}`}
             </span>
           )}
 
           <div style={{ minWidth: 0, overflow: 'hidden', paddingLeft: '2px' }}>
             <div style={{ fontSize: '14px', fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#fff' }}>
-              {currentBreakTitle ? 'ARAYA GİRİLDİ' : (currentSong?.title || 'Şarkı Yok')}
+              {currentBreakTitle ? 'ARAYA GİRİLDİ' : isMissingSong ? 'Silinmiş şarkı' : (currentSong?.title || 'Şarkı Yok')}
             </div>
             <div style={{ fontSize: '11px', color: '#a1a1aa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              {!currentBreakTitle && currentSong && (
+              {showsSong && (
                 <button
                   onClick={(e) => { e.stopPropagation(); setTranspose(t => Math.max(-12, t - 1)); }}
                   title="Yarım Ton Aşağı"
@@ -681,7 +741,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
                 </button>
               )}
               <strong style={{ color: '#fbbf24', fontSize: '13px' }}>{currentKey}</strong>
-              {!currentBreakTitle && currentSong && (
+              {showsSong && (
                 <button
                   onClick={(e) => { e.stopPropagation(); setTranspose(t => Math.min(12, t + 1)); }}
                   title="Yarım Ton Yukarı"
@@ -690,7 +750,8 @@ export const StageViewer: React.FC<StageViewerProps> = ({
                   +
                 </button>
               )}
-              <span>• {tempo} BPM</span>
+              {showsSong && <span>• {tempo} BPM</span>}
+              {showsSong && transpose !== 0 && <span style={{ color: '#38bdf8' }}>• kişisel ton</span>}
             </div>
           </div>
         </div>
@@ -808,12 +869,35 @@ export const StageViewer: React.FC<StageViewerProps> = ({
         </div>
       </div>
 
+      {/* Setlist dışı şarkı uyarısı */}
+      {detourSongId && activeSetlist && (
+        <div
+          data-no-swipe="true"
+          style={{ background: '#1c1917', borderBottom: '1px solid #d97706', padding: '6px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', fontSize: '12px' }}
+        >
+          <span style={{ color: '#fbbf24' }}>Setlist dışında bir şarkı açık. Setlistteki yeriniz korunuyor.</span>
+          <button
+            onClick={() => setDetourSongId(null)}
+            style={{ background: '#d97706', color: '#000', border: 'none', borderRadius: '6px', padding: '4px 10px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
+          >
+            <Undo2 size={13} /> Setliste dön (#{currentSetlistIndex + 1})
+          </button>
+        </div>
+      )}
+
       {/* Şarkı İçeriği ve Sinematik Geçiş Efekti */}
-      {currentBreakTitle ? (
+      {currentBreakTitle || isMissingSong ? (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-          <div style={{ textAlign: 'center' }}>
-            <h1 style={{ fontSize: '32px', fontWeight: 'bold', marginBottom: '8px' }}>{currentBreakTitle}</h1>
-            <p style={{ fontSize: '14px', color: '#a1a1aa' }}>Sahne Arası - Sonraki şarkıya geçmek için ekranı sola kaydırın.</p>
+          <div style={{ textAlign: 'center', maxWidth: '520px' }}>
+            <h1 style={{ fontSize: '32px', fontWeight: 'bold', marginBottom: '8px', color: isMissingSong ? '#ef4444' : '#fff' }}>
+              {isMissingSong ? 'Bu şarkı arşivden silinmiş' : currentBreakTitle}
+            </h1>
+            <p style={{ fontSize: '14px', color: '#a1a1aa', lineHeight: 1.5 }}>
+              {isMissingSong
+                ? 'Setlistteki bu sıradaki şarkı artık repertuvarda yok. Setlist ekranından çıkarabilirsiniz.'
+                : 'Sahne arası.'}
+              {canGoNext && ' Sonrakine geçmek için ekranı sola kaydırın veya sağdaki oku kullanın.'}
+            </p>
           </div>
         </div>
       ) : (
@@ -852,6 +936,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
             }}
           >
             
+            <div ref={contentMeasureRef}>
             {/* Şarkı Başlığı */}
             {currentSong && (
               <div style={{ 
@@ -881,8 +966,13 @@ export const StageViewer: React.FC<StageViewerProps> = ({
             )}
 
             <SongRenderer lines={parsedContent} fontSize={fontSize} layoutMode="over" isTwoColumn={effectiveTwoColumn} />
-            
+            </div>
+
+            {/* key: her şarkıda tuval sıfırdan kurulur; bir şarkının notları
+                diğerine taşınmaz ve o şarkının kendi notları yüklenir. */}
             <DrawingCanvas
+              key={currentSong?.id || 'no-song'}
+              fontSize={fontSize}
               initialData={currentSong?.drawingData}
               onSave={handleSaveDrawing}
               containerHeight={contentHeight}
@@ -897,10 +987,38 @@ export const StageViewer: React.FC<StageViewerProps> = ({
         </div>
       )}
 
+      {/* Setlist gezinme okları — ekranın iki yanında, dikey ortada; alttaki
+          kaydırma kumandası ve kalem düğmesiyle çakışmaz. Fare, dokunmatik
+          ve klavye kullanıcıları için. */}
+      {activeSetlist && itemsCount > 0 && !isDrawingMode && (
+        <>
+          {canGoPrev && (
+            <button
+              data-no-swipe="true"
+              onClick={() => goTo(-1)}
+              title={detourSongId ? 'Setliste dön' : 'Önceki'}
+              style={{ position: 'fixed', left: '4px', top: '50%', transform: 'translateY(-50%)', width: '34px', height: '64px', borderRadius: '10px', background: 'rgba(24, 24, 27, 0.6)', border: '1px solid rgba(63, 63, 70, 0.7)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 45, opacity: 0.6, padding: 0 }}
+            >
+              <ChevronLeft size={22} />
+            </button>
+          )}
+          {canGoNext && (
+            <button
+              data-no-swipe="true"
+              onClick={() => goTo(1)}
+              title={nextItemLabel ? (detourSongId ? nextItemLabel : `Sonraki: ${nextItemLabel}`) : 'Sonraki'}
+              style={{ position: 'fixed', right: '4px', top: '50%', transform: 'translateY(-50%)', width: '34px', height: '64px', borderRadius: '10px', background: 'rgba(24, 24, 27, 0.6)', border: '1px solid rgba(63, 63, 70, 0.7)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 45, opacity: 0.6, padding: 0 }}
+            >
+              <ChevronRight size={22} />
+            </button>
+          )}
+        </>
+      )}
+
       {/* Kalemle Not Al — SongbookPro'daki gibi ekranın üstünde yüzen, sözleri
           kapatmasın diye hafif transparan bir buton. Basılınca doğrudan çizim
           moduna geçer; "Düzenle" menüsündeki eşdeğeri de duruyor. */}
-      {!currentBreakTitle && currentSong && !isDrawingMode && (
+      {showsSong && !isDrawingMode && (
         <button
           data-no-swipe="true"
           onClick={() => setIsDrawingMode(true)}
@@ -933,7 +1051,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       )}
 
       {/* Otomatik Kaydırma Kumandası */}
-      {!currentBreakTitle && currentSong && !isDrawingMode && (
+      {showsSong && !isDrawingMode && (
         <div 
           data-no-swipe="true"
           style={{
@@ -998,7 +1116,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
       )}
 
       {/* POP-UP: DÜZENLEME & SAHNE AYARLARI */}
-      {isToolsModalOpen && (
+      {isToolsModalOpen && showsSong && (
         <div 
           onClick={() => setIsToolsModalOpen(false)}
           style={{
@@ -1097,6 +1215,11 @@ export const StageViewer: React.FC<StageViewerProps> = ({
                 >
                   +
                 </button>
+              </div>
+
+              <div style={{ fontSize: '11px', color: '#71717a', marginTop: '8px', lineHeight: 1.4 }}>
+                Bu ton yalnızca bu cihazda geçerli ve şarkı başına hatırlanır; grubun diğer üyelerini etkilemez.
+                Herkes için değiştirmek isterseniz "Kalıcı Kaydet" düğmesini kullanın.
               </div>
 
               <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #27272a', display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1230,7 +1353,7 @@ export const StageViewer: React.FC<StageViewerProps> = ({
                 onClick={handleSavePermanently}
                 style={{ background: '#059669', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
               >
-                <Check size={16} /> Yeni Tonu ({currentKey}) ve BPM'i Kalıcı Kaydet
+                <Check size={16} /> Tonu ({currentKey}) ve BPM'i herkes için Kalıcı Kaydet
               </button>
             )}
           </div>
@@ -1243,7 +1366,22 @@ export const StageViewer: React.FC<StageViewerProps> = ({
         onClose={() => setIsQuickJumpOpen(false)}
         songs={songsList}
         onSelectSong={(selectedSong) => {
-          if (onSelectSongDirectly) onSelectSongDirectly(selectedSong);
+          if (activeSetlist) {
+            // Şarkı setlistteyse oraya git (önce ileride olanı tercih et);
+            // değilse setlistten çıkmadan geçici olarak aç.
+            const items = activeSetlist.items;
+            const forward = items.findIndex((it, i) => i >= currentSetlistIndex && it.type === 'song' && it.songId === selectedSong.id);
+            const any = items.findIndex(it => it.type === 'song' && it.songId === selectedSong.id);
+            const idx = forward >= 0 ? forward : any;
+            if (idx >= 0) {
+              setDetourSongId(null);
+              changeSetlistIndex(idx);
+            } else {
+              setDetourSongId(selectedSong.id);
+            }
+          } else if (onSelectSongDirectly) {
+            onSelectSongDirectly(selectedSong);
+          }
         }}
       />
     </div>

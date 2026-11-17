@@ -23,26 +23,6 @@ export interface Setlist {
   items: SetlistItem[];
 }
 
-export interface BandWorkspace {
-  id: string;
-  name: string;
-  songs: Song[];
-  setlists: Setlist[];
-  pinHash?: string | null;   // ← YENİ
-}
-
-export interface BandMember {
-  id: string;
-  name: string;
-  role?: string; // enstrüman / rol, isteğe bağlı
-}
-
-export interface BandWorkspace {
-  // ...mevcut alanlar
-  members: BandMember[];
-}
-
-
 export interface MemberPreferences {
   fontSize?: number;
   isTwoColumn?: boolean;
@@ -53,6 +33,15 @@ export interface MemberPreferences {
 export interface BandMember {
   id: string;
   name: string;
-  role?: string;
-  preferences?: MemberPreferences; // yeni eklenen alan
+  role?: string; // enstrüman / rol, isteğe bağlı
+  preferences?: MemberPreferences;
+}
+
+export interface BandWorkspace {
+  id: string;
+  name: string;
+  songs: Song[];
+  setlists: Setlist[];
+  members: BandMember[];
+  pinHash?: string | null;
 }

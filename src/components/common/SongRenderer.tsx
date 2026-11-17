@@ -330,6 +330,8 @@ export const SongRenderer: React.FC<SongRendererProps> = ({
                       alignItems: 'flex-end',
                       textShadow: '0 0 8px rgba(251, 191, 36, 0.3)',
                       overflow: 'visible',
+                      // Bitişik akorlar (ör. [Am][F][C]) birbirine yapışmasın.
+                      paddingRight: seg.chord ? '0.6ch' : 0,
                     }}
                   >
                     {seg.chord || ' '}

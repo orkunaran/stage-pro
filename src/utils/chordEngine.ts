@@ -1,8 +1,6 @@
 export interface ParsedLine {
   type: 'lyrics' | 'comment' | 'empty' | 'grid';
   content?: string;
-  lyrics?: string;
-  chords?: { chord: string; position: number }[];
   // 'grid' tipi satırlar için: her ölçünün (bar/measure) içindeki vuruş
   // belirteçleri (akor adı, "/" veya "%"). Render tarafı her ölçüyü tek
   // parça (satır sonunda bölünmeden) kutu halinde göstermek için kullanır.
@@ -11,42 +9,92 @@ export interface ParsedLine {
   // (ölçü olmayan) serbest metin — örn. "x2" gibi tekrar notları.
   gridPrefix?: string;
   gridSuffix?: string;
+  lyrics?: string;
+  chords?: { chord: string; position: number }[];
 }
 
 const NOTES_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const NOTES_FLAT = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
 
-export function transposeNote(note: string, semitones: number): string {
-  let clean = note.trim();
-  let isFlat = clean.includes('b');
-  let scale = isFlat ? NOTES_FLAT : NOTES_SHARP;
-  
-  let idx = scale.indexOf(clean);
-  if (idx === -1) {
-    scale = NOTES_SHARP;
-    idx = scale.indexOf(clean);
-  }
-  if (idx === -1) {
-    scale = NOTES_FLAT;
-    idx = scale.indexOf(clean);
-  }
-  if (idx === -1) return note;
+const NOTE_TO_PITCH: Record<string, number> = {
+  C: 0, 'B#': 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, Fb: 4, 'E#': 5, F: 5,
+  'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11, Cb: 11,
+};
 
-  let newIdx = (idx + semitones) % 12;
-  if (newIdx < 0) newIdx += 12;
-  return scale[newIdx];
+// Tam akor sembolü: kök + (isteğe bağlı) nitelik + (isteğe bağlı) /bas.
+// "Chorus", "Bridge", "Giriş", "N.C." gibi etiketler buna UYMAZ ve
+// transpoze edilmez (eskiden [Chorus] → [Dhorus] oluyordu).
+const CHORD_RE =
+  /^([A-G](?:#|b)?)((?:maj|min|dim|aug|sus|add|alt|m|M|\d+|\/\d+|[#b+\-°ø(),])*)(?:\/([A-G](?:#|b)?))?$/;
+
+export function isChordSymbol(text: string): boolean {
+  return CHORD_RE.test(text.trim());
 }
 
-export function transposeChord(chord: string, semitones: number): string {
+export function noteToPitch(note: string): number {
+  const p = NOTE_TO_PITCH[note.trim()];
+  return p === undefined ? -1 : p;
+}
+
+export function pitchToName(pitch: number, preferFlat: boolean): string {
+  const p = ((pitch % 12) + 12) % 12;
+  return (preferFlat ? NOTES_FLAT : NOTES_SHARP)[p];
+}
+
+// Bemol (b) ile yazılan tonlar: F, Bb, Eb, Ab, Db majör; Dm, Gm, Cm, Fm, Bbm, Ebm minör.
+const FLAT_MAJOR = new Set([5, 10, 3, 8, 1]);
+const FLAT_MINOR = new Set([2, 7, 0, 5, 10, 3]);
+
+export function keyPrefersFlat(pitch: number, isMinor: boolean): boolean {
+  return (isMinor ? FLAT_MINOR : FLAT_MAJOR).has(((pitch % 12) + 12) % 12);
+}
+
+export function parseKey(key?: string): { root: string; pitch: number; isMinor: boolean } {
+  const m = (key || '').trim().match(/^([A-G](?:#|b)?)(.*)$/);
+  if (!m || noteToPitch(m[1]) < 0) return { root: 'A', pitch: 9, isMinor: true };
+  const isMinor = /^(m(?!aj)|min|-)/.test(m[2]);
+  return { root: m[1], pitch: noteToPitch(m[1]), isMinor };
+}
+
+/** Şarkının tonunu transpoze eder ve hedef tonun diyez mi bemol mü yazılacağını döndürür. */
+export function transposeKey(key: string | undefined, semitones: number) {
+  const k = parseKey(key);
+  if (semitones === 0) {
+    const preferFlat = k.root.includes('b') || (!k.root.includes('#') && keyPrefersFlat(k.pitch, k.isMinor));
+    return { name: k.root + (k.isMinor ? 'm' : ''), root: k.root, isMinor: k.isMinor, preferFlat };
+  }
+  const pitch = (((k.pitch + semitones) % 12) + 12) % 12;
+  const preferFlat = keyPrefersFlat(pitch, k.isMinor);
+  const root = pitchToName(pitch, preferFlat);
+  return { name: root + (k.isMinor ? 'm' : ''), root, isMinor: k.isMinor, preferFlat };
+}
+
+export function transposeNote(note: string, semitones: number, preferFlat?: boolean): string {
+  const clean = note.trim();
+  const pitch = noteToPitch(clean);
+  if (pitch < 0) return note;
+  const flat = preferFlat ?? clean.includes('b');
+  return pitchToName(pitch + semitones, flat);
+}
+
+export function transposeChord(chord: string, semitones: number, preferFlat?: boolean): string {
   if (semitones === 0) return chord;
-  return chord.replace(/([A-G][#b]?)/g, (match) => transposeNote(match, semitones));
+  const m = chord.trim().match(CHORD_RE);
+  if (!m) return chord; // bölüm etiketi vb. → olduğu gibi bırak
+  const [, root, suffix, bass] = m;
+  const flat = preferFlat ?? root.includes('b');
+  return transposeNote(root, semitones, flat) + suffix + (bass ? '/' + transposeNote(bass, semitones, flat) : '');
 }
 
-export function permanentlyTransposeChordPro(chordProText: string, semitones: number): string {
+export function permanentlyTransposeChordPro(chordProText: string, semitones: number, preferFlat?: boolean): string {
   if (semitones === 0) return chordProText;
-  return chordProText.replace(/\[(.*?)\]/g, (_, chord) => `[${transposeChord(chord, semitones)}]`);
+  return chordProText.replace(/\[(.*?)\]/g, (_, chord) => `[${transposeChord(chord, semitones, preferFlat)}]`);
 }
 
+const LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+const LETTER_PITCH = [0, 2, 4, 5, 7, 9, 11];
+
+/** Gamı doğru harflerle yazar: F majör → F G A Bb C D E (A# değil). */
 export function getScaleNotes(root: string, scaleType: string): string[] {
   const intervalsMap: Record<string, number[]> = {
     'Ionian (Major)': [2, 2, 1, 2, 2, 2, 1],
@@ -60,39 +108,41 @@ export function getScaleNotes(root: string, scaleType: string): string[] {
     'Lydian': [2, 2, 2, 1, 2, 2, 1],
     'Locrian': [1, 2, 2, 1, 2, 2, 2],
   };
-
   const intervals = intervalsMap[scaleType] || intervalsMap['Aeolian (Minor)'];
-  const notes = [root];
-  let currentNote = root;
+  const rootPitch = noteToPitch(root);
+  if (rootPitch < 0) return [root];
 
-  for (let i = 0; i < intervals.length - 1; i++) {
-    currentNote = transposeNote(currentNote, intervals[i]);
-    notes.push(currentNote);
+  const startLetter = LETTERS.indexOf(root[0]);
+  const notes: string[] = [];
+  let pitch = rootPitch;
+  for (let i = 0; i < 7; i++) {
+    const idx = (startLetter + i) % 7;
+    let diff = (((pitch - LETTER_PITCH[idx]) % 12) + 12) % 12;
+    if (diff > 6) diff -= 12;
+    const acc = diff === 0 ? '' : diff === 1 ? '#' : diff === 2 ? '##' : diff === -1 ? 'b' : diff === -2 ? 'bb' : null;
+    notes.push(acc === null ? pitchToName(pitch, false) : LETTERS[idx] + acc);
+    pitch = (pitch + intervals[i]) % 12;
   }
   return notes;
 }
 
 // Köşeli parantezli akorları ve aralarındaki sözü tek bir satırdan ayıklar.
-// Hem normal (akor+söz iç içe) satırlar hem de "akor-sadece" satırların
-// tespiti (aşağıya bakınız) için ortak olarak kullanılır.
-function extractLyricsAndChords(rawLine: string, semitones: number) {
+// Akor, sözdeki GERÇEK konumuna bağlanır (eskiden akor uzunluğu kadar ileri
+// itiliyordu ve "[Am]O [Dm]an" satırında Dm "a" yerine "n" üstüne düşüyordu).
+// Akor sözden genişse aradaki boşluğu çizim tarafı (SongRenderer) açar.
+function extractLyricsAndChords(rawLine: string, semitones: number, preferFlat?: boolean) {
   let lyrics = '';
   const chords: { chord: string; position: number }[] = [];
   let inlineContent = '';
   let i = 0;
-  let lastChordEndPos = 0;
 
   while (i < rawLine.length) {
     if (rawLine[i] === '[') {
       const closeIdx = rawLine.indexOf(']', i);
       if (closeIdx !== -1) {
         const chord = rawLine.substring(i + 1, closeIdx);
-        const transposed = transposeChord(chord, semitones);
-
-        let pos = Math.max(lyrics.length, lastChordEndPos);
-        chords.push({ chord: transposed, position: pos });
-        lastChordEndPos = pos + transposed.length + 1;
-
+        const transposed = transposeChord(chord, semitones, preferFlat);
+        chords.push({ chord: transposed, position: lyrics.length });
         inlineContent += `[${transposed}]`;
         i = closeIdx + 1;
         continue;
@@ -111,13 +161,18 @@ function extractLyricsAndChords(rawLine: string, semitones: number) {
 // örn. "Verse 2", "Chorus:", "Pre-Chorus 2:") otomatik tanınsın diye.
 const SECTION_HEADER_REGEX = /^(verse|chorus|pre-?chorus|bridge|intro|solo)\s*\d*\s*:?\s*$/i;
 
-export function parseChordPro(text: string, semitones: number = 0): ParsedLine[] {
+// Akorlar çıkarıldıktan sonra yalnızca bu karakterler kalıyorsa satır bir
+// akor tablosudur (grid). En az bir "|" ya da "/" şart; böylece "[D/F#]Söz"
+// gibi slash akorla başlayan söz satırları artık grid sanılmaz.
+const GRID_REST = /^[\s|/%xX×()0-9.:\-]*$/;
+
+export function parseChordPro(text: string, semitones: number = 0, preferFlat?: boolean): ParsedLine[] {
   if (!text) return [];
   const rawLines = text.split(/\r?\n/);
   const parsedLines: ParsedLine[] = [];
 
   for (let li = 0; li < rawLines.length; li++) {
-    let rawLine = rawLines[li];
+    const rawLine = rawLines[li];
     const trimmed = rawLine.trim();
 
     if (!trimmed) {
@@ -135,47 +190,22 @@ export function parseChordPro(text: string, semitones: number = 0): ParsedLine[]
       continue;
     }
 
-    // {c: ...} yazılmamış ama tanıdık bir bölüm adı olan satırları da
-    // (Verse, Chorus, Pre-Chorus, Bridge, Intro, Solo) başlık gibi göster.
     if (SECTION_HEADER_REGEX.test(trimmed)) {
       parsedLines.push({ type: 'comment', content: trimmed.replace(/:\s*$/, '') });
       continue;
     }
 
-    if (rawLine.includes('[') && rawLine.includes(']')) {
-      // "Bu satır bir akor tablosu (grid, örn. '| Am / / / |') mu yoksa
-      // içinde akor geçen normal bir söz satırı mı?" kontrolü.
-      //
-      // NOT: Önceki hali `rawLine.includes('/')` ile satırın HERHANGİ bir
-      // yerinde "/" var mı diye bakıyordu. Bu, "Bbm/F#" gibi bir SLASH
-      // AKORU içeren ve akorla başlayan normal söz satırlarını da grid
-      // sanıyordu (çünkü akorun içindeki "/" de sayılıyordu) — sonuç
-      // olarak o satırın tüm sözleri kayboluyor, StageViewer'da bomboş bir
-      // akor bloğu görünüyordu. Şimdi köşeli parantez içindeki akorları
-      // tamamen çıkarıp SADECE dışarıda kalan metne bakıyoruz: dışarıda
-      // gerçek harf/söz varsa bu kesinlikle bir söz satırıdır; ayrıca
-      // gerçek bir grid için en az bir "|" ya da "/" bulunması şart
-      // koşuluyor (yalnızca boşluk kalması artık grid saymaya yetmiyor —
-      // bu durum aşağıdaki "akor-sadece satır" birleştirmesine bırakılıyor).
-      // Parantezler de ("(x2)" gibi tekrar notları için) izinli karakterler
-      // arasında — yoksa örn. "| [G] / / / | (x2)" satırı, parantezler
-      // yüzünden grid sayılmayıp akorlar sahte bir "söz" üzerine yanlış
-      // konumlandırılıyordu.
+    if (/\[[^\]]*\]/.test(rawLine)) {
       const outsideChordBrackets = rawLine.replace(/\[[^\]]*\]/g, '').trim();
       const isGridLine =
         outsideChordBrackets.length > 0 &&
-        /^[\s|/%x()0-9]*$/i.test(outsideChordBrackets) &&
+        GRID_REST.test(outsideChordBrackets) &&
         /[|/]/.test(outsideChordBrackets);
 
       if (isGridLine) {
-        const formattedGrid = rawLine.replace(/\[(.*?)\]/g, (_, chord) => {
-          return transposeChord(chord, semitones);
-        });
+        const formattedGrid = rawLine.replace(/\[(.*?)\]/g, (_, chord) => transposeChord(chord, semitones, preferFlat));
 
-        // Satırı "|" karakterlerine göre ölçülere (bar) ayır. Sadece iki
-        // "|" arasında kalan bölümler gerçek ölçü kutusu olarak render
-        // edilir; ilk "|"'den önceki veya son "|"'den sonraki serbest metin
-        // (örn. "x2" tekrar notu) ayrı tutulur ve kutulanmaz.
+        // Satırı "|" karakterlerine göre ölçülere (bar) ayır.
         const pipeIndices: number[] = [];
         for (let idx = 0; idx < formattedGrid.length; idx++) {
           if (formattedGrid[idx] === '|') pipeIndices.push(idx);
@@ -188,37 +218,21 @@ export function parseChordPro(text: string, semitones: number = 0): ParsedLine[]
         if (pipeIndices.length >= 2) {
           gridPrefix = formattedGrid.slice(0, pipeIndices[0]).trim();
           gridSuffix = formattedGrid.slice(pipeIndices[pipeIndices.length - 1] + 1).trim();
-
           for (let p = 0; p < pipeIndices.length - 1; p++) {
             const segment = formattedGrid.slice(pipeIndices[p] + 1, pipeIndices[p + 1]).trim();
-            if (segment) {
-              bars.push(segment.split(/\s+/).filter(Boolean));
-            }
+            if (segment) bars.push(segment.split(/\s+/).filter(Boolean));
           }
         } else {
           gridSuffix = formattedGrid.trim();
         }
 
-        parsedLines.push({
-          type: 'grid',
-          content: formattedGrid,
-          bars,
-          gridPrefix,
-          gridSuffix,
-        });
+        parsedLines.push({ type: 'grid', content: formattedGrid, bars, gridPrefix, gridSuffix });
         continue;
       }
 
-      const { lyrics, chords, content } = extractLyricsAndChords(rawLine, semitones);
+      const { lyrics, chords, content } = extractLyricsAndChords(rawLine, semitones, preferFlat);
 
-      // "Akor-sadece" satır tespiti: satırda köşeli parantezli akor(lar)
-      // var ama etraflarında boşluk dışında hiçbir söz/harf yok — yani bu,
-      // dışarıdan yapıştırılan klasik "akorlar üstte, ayrı bir satırda söz
-      // altta" formatının köşeli-parantez haline çevrilmiş hali (örn.
-      // "Akorları Otomatik [ ] İçine Al" düğmesiyle). Bu durumda akorları,
-      // hemen altındaki asıl söz satırıyla BİRLEŞTİRİYORUZ; aksi halde
-      // akor satırı kendi başına, altı boş bir satır olarak render edilip
-      // gerçek söze göre fazladan bir satır yüksekliğinde boşluk bırakıyordu.
+      // "Akor-sadece" satır + altında söz satırı → tek satırda birleştir.
       const isChordOnlyLine = chords.length > 0 && lyrics.trim() === '';
       if (isChordOnlyLine) {
         const nextRaw = rawLines[li + 1];
@@ -231,30 +245,15 @@ export function parseChordPro(text: string, semitones: number = 0): ParsedLine[]
           !nextRaw.includes('[');
 
         if (nextIsUsableLyric) {
-          parsedLines.push({
-            type: 'lyrics',
-            content: nextRaw,
-            lyrics: nextRaw,
-            chords,
-          });
-          li++; // Söz satırını da tükettik, tekrar işlenmesin diye atla.
+          parsedLines.push({ type: 'lyrics', content: nextRaw, lyrics: nextRaw, chords });
+          li++;
           continue;
         }
       }
 
-      parsedLines.push({
-        type: 'lyrics',
-        content,
-        lyrics,
-        chords,
-      });
+      parsedLines.push({ type: 'lyrics', content, lyrics, chords });
     } else {
-      parsedLines.push({
-        type: 'lyrics',
-        content: rawLine,
-        lyrics: rawLine,
-        chords: [],
-      });
+      parsedLines.push({ type: 'lyrics', content: rawLine, lyrics: rawLine, chords: [] });
     }
   }
 
@@ -262,18 +261,8 @@ export function parseChordPro(text: string, semitones: number = 0): ParsedLine[]
 }
 
 // Seçili metindeki akorları "| [Akor] / / / |" ölçü (grid) notasyonuna
-// çevirir. Bir ölçü HER ZAMAN 4 vuruş kabul edilir — kapanış "|" işaretleri
-// her zaman 4'ün katlarında çıkar. `beatsPerChord`, her akorun bu 4 vuruşluk
-// ölçü içinde kaç vuruş tuttuğunu belirtir; her akor konumu fark etmeksizin
-// kendi `beatsPerChord - 1` kadar "/" işaretini alır:
-//   - beatsPerChord = 4  → her akor kendi ölçüsünü tek başına doldurur
-//     ("| [F#m] / / / |").
-//   - beatsPerChord = 2  → bir ölçüyü İKİ akor paylaşır, ikisi de kendi
-//     "/"ini alır (örn. "G A" için "| [G] / [A] / |").
-//   - beatsPerChord = 1  → bir ölçüyü DÖRT akor paylaşır, hiçbiri "/" almaz
-//     ("| [C] [G] [Am] [F] |").
-// 4'e tam bölünmeyen değerler (örn. 3) için son ölçü tam dolmayabilir —
-// bu durumda sonucu elle küçük bir düzeltmeyle tamamlamanız gerekebilir.
+// çevirir. Bir ölçü HER ZAMAN 4 vuruş kabul edilir. `beatsPerChord`, her
+// akorun bu 4 vuruşluk ölçü içinde kaç vuruş tuttuğunu belirtir.
 export function convertChordsToGridNotation(text: string, beatsPerChord: number = 4): string {
   if (!text) return '';
   const BAR_CAPACITY = 4;
@@ -294,9 +283,7 @@ export function convertChordsToGridNotation(text: string, beatsPerChord: number 
       const bars: string[] = [];
       for (let i = 0; i < tokens.length; i += chordsPerBar) {
         const group = tokens.slice(i, i + chordsPerBar);
-        const symbols = group.map(chord =>
-          [`[${chord}]`, ...Array(safeBeats - 1).fill('/')].join(' ')
-        );
+        const symbols = group.map(chord => [`[${chord}]`, ...Array(safeBeats - 1).fill('/')].join(' '));
         bars.push(symbols.join(' '));
       }
 
@@ -305,43 +292,77 @@ export function convertChordsToGridNotation(text: string, beatsPerChord: number 
     .join('\n');
 }
 
+// ---------- Otomatik [ ] dönüştürme ----------
+
+// Akor satırında akor dışında bulunabilecek işaretler: | / % - x2 2x (x2) : .
+const BAR_TOKEN = /^(?:\|{1,2}:?|:?\|{1,2}|\/+|%|-+|\.{1,3}|[xX×]\d*|\d+[xX×]?|\d+\.|\(|\)|\(?[xX×]\d+\)?)$/;
+
+function isChordLine(line: string): boolean {
+  const t = line.trim();
+  if (!t || t.startsWith('{') || /\[[^\]]*\]/.test(t)) return false;
+  let chords = 0;
+  for (const tok of t.split(/\s+/)) {
+    if (CHORD_RE.test(tok)) chords++;
+    else if (!BAR_TOKEN.test(tok)) return false; // tek bir söz kelimesi bile varsa akor satırı değil
+  }
+  return chords > 0;
+}
+
+function isLyricLine(line: string | undefined): boolean {
+  if (line === undefined) return false;
+  const t = line.trim();
+  return (
+    t.length > 0 &&
+    !t.startsWith('{') &&
+    !SECTION_HEADER_REGEX.test(t) &&
+    !isChordLine(line) &&
+    !/\[[^\]]*\]/.test(t)
+  );
+}
+
+/** "Akor satırı + altında söz satırı" düzenini, sütun hizasını koruyarak satır içi ChordPro'ya çevirir. */
+function mergeChordLineIntoLyrics(chordLine: string, lyricLine: string): string {
+  const chords: { col: number; chord: string }[] = [];
+  const re = /\S+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(chordLine))) {
+    if (CHORD_RE.test(m[0])) chords.push({ col: m.index, chord: m[0] });
+  }
+  let result = lyricLine.replace(/\s+$/, '');
+  const maxCol = Math.max(...chords.map(c => c.col));
+  if (result.length < maxCol) result = result.padEnd(maxCol, ' ');
+  for (let k = chords.length - 1; k >= 0; k--) {
+    const { col, chord } = chords[k];
+    result = result.slice(0, col) + `[${chord}]` + result.slice(col);
+  }
+  return result;
+}
+
+/**
+ * Düz metindeki akorları [ ] içine alır.
+ * - Sadece TAMAMEN akor (ve | / x2 gibi işaretler) içeren satırlara dokunur;
+ *   söz satırlarındaki büyük harfler ("Aşkın", "I Am A...") akor sanılmaz.
+ * - Akor satırının hemen altında söz satırı varsa ikisini sütun hizasına
+ *   göre birleştirir (internetten kopyalanan akorlu sözler).
+ */
 export function autoConvertTextToChordPro(text: string): string {
   if (!text) return '';
-  // NOT: Sondaki `\b` yerine `(?![A-Za-z0-9])` kullanılıyor. `\b`, "#" gibi
-  // harf olmayan bir karakterle bitip hemen ardından boşluk/satır sonu gelen
-  // akorlarda (örn. "F#") yanlış geri çekiliyor ve sadece "F" kısmını
-  // parantez içine alıyordu (çünkü "#" -> boşluk arasında \b sağlanamıyor,
-  // motor "#"'i hiç almadan harf->boşluk sınırında duruyor). Bemollerde
-  // ("Bb", "Eb") iki karakter de harf olduğundan bu sorun yaşanmıyordu.
-  //
-  // `(?:\([^)\n]*\))?` grubu ise akora BOŞLUKSUZ bitişik parantezli ek
-  // tonları (örn. "F#m(b9)", "Cmaj7(#11)", "G7(b9,#5)") akorun bir parçası
-  // sayıp birlikte parantez içine alır. Akordan sonra boşluk varsa (örn.
-  // "Am (tekrar)" gibi notlar) bu grup eşleşmez, parantez dışarıda kalır —
-  // böylece söz/tekrar notları yanlışlıkla akor sanılmaz.
-  //
-  // ÖNEMLİ: Sondaki dışlama kümesine Türkçe harfler de (çÇ ğĞ ıİ öÖ şŞ üÜ)
-  // eklendi. Önceden yalnızca [A-Za-z0-9] içeriyordu; bu da "Aşka" gibi bir
-  // kelimede "A"dan hemen sonra gelen "ş" harfini tanımadığından, "A"yı
-  // orada biten TEK BAŞINA bir akormuş gibi algılayıp yanlışlıkla [A]
-  // içine alıyordu (aynı sorun "Güzel", "Gördüm" gibi G ile başlayan
-  // kelimelerde de oluyordu). Artık akordan hemen sonra bir Türkçe harf
-  // gelirse bu, akorun değil bir kelimenin devamı sayılır.
-  const chordRegex = /\b([A-G][#b]?(?:m(?:aj|in)?|M|dim|aug|sus[24]?|add[29]?|[0-9]+|-5|\+5|b5|#5|b9|#9)*(?:\([^)\n]*\))?(?:\/[A-G][#b]?)?)(?![A-Za-z0-9çÇğĞıİöÖşŞüÜ])/g;
+  const lines = text.split(/\r?\n/).map(l => l.replace(/\t/g, '    '));
+  const out: string[] = [];
 
-  return text
-    .split(/\r?\n/)
-    .map(line => {
-      if (line.trim().startsWith('{')) return line;
-
-      return line.replace(chordRegex, (match, chord, offset, fullString) => {
-        const before = fullString.slice(0, offset);
-        const after = fullString.slice(offset + match.length);
-        if (before.lastIndexOf('[') > before.lastIndexOf(']') && after.indexOf(']') !== -1) {
-          return match;
-        }
-        return `[${chord}]`;
-      });
-    })
-    .join('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (isChordLine(line)) {
+      const next = lines[i + 1];
+      if (!line.includes('|') && isLyricLine(next)) {
+        out.push(mergeChordLineIntoLyrics(line, next!));
+        i++;
+        continue;
+      }
+      out.push(line.replace(/\S+/g, tok => (CHORD_RE.test(tok) ? `[${tok}]` : tok)));
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
 }

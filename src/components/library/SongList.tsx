@@ -7,14 +7,22 @@ import {
   Plus, Music, Trash2, Play, ListMusic, Users, 
   Download, Upload, FolderPlus, Files, Edit3, 
   CheckSquare, Square, Share2, Menu, X,
-  UserCog, PanelLeftClose, PanelLeftOpen, Search, ListPlus
+  UserCog, PanelLeftClose, PanelLeftOpen, Search, ListPlus, Pencil, LogOut
 } from 'lucide-react';
+
+type SortMode = 'title' | 'artist' | 'recent';
+
+// Türkçe harflere duyarlı küçük harf (İ/ı, Ş/ş): "KISA" araması "Kısa"yı bulur.
+const norm = (s: string) => (s || '').toLocaleLowerCase('tr');
 
 interface SongListProps {
   workspaces: BandWorkspace[];
   activeWorkspaceId: string;
   onSelectWorkspace: (id: string) => void;
   onCreateWorkspace: () => void;
+  onRenameWorkspace: () => void;
+  onLeaveWorkspace: () => void;
+  onDeleteWorkspace: () => void;
   onExportWorkspace: () => void;
   onImportWorkspace: (importedWorkspace: BandWorkspace) => void;
   onJoinWorkspace: (workspaceId: string, pin?: string) => Promise<{ success: boolean; requiresPin?: boolean; error?: string }>;
@@ -39,6 +47,9 @@ export const SongList: React.FC<SongListProps> = ({
   activeWorkspaceId,
   onSelectWorkspace,
   onCreateWorkspace,
+  onRenameWorkspace,
+  onLeaveWorkspace,
+  onDeleteWorkspace,
   onExportWorkspace,
   onImportWorkspace,
   onJoinWorkspace,
@@ -63,6 +74,9 @@ export const SongList: React.FC<SongListProps> = ({
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [membersModalWorkspaceId, setMembersModalWorkspaceId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortMode, setSortMode] = useState<SortMode>(() => {
+    try { return (localStorage.getItem('stage_song_sort') as SortMode) || 'title'; } catch { return 'title'; }
+  });
   const [setlistMenuSongId, setSetlistMenuSongId] = useState<string | null>(null);
 
   // Mobil ekran tespiti ve sol çekmece state'i
@@ -103,13 +117,17 @@ export const SongList: React.FC<SongListProps> = ({
   const activeWs = workspaces.find(w => w.id === activeWorkspaceId) || workspaces[0];
   const membersModalWorkspace = workspaces.find(w => w.id === membersModalWorkspaceId) || null;
 
-  const filteredSongs = searchQuery.trim()
-    ? songs.filter(s =>
-        s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        s.artist.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (s.baseKey && s.baseKey.toLowerCase().includes(searchQuery.toLowerCase()))
-      )
-    : songs;
+  const filteredSongs = (() => {
+    const q = norm(searchQuery.trim());
+    const list = q
+      ? songs.filter(s => norm(s.title).includes(q) || norm(s.artist).includes(q) || norm(s.baseKey).includes(q))
+      : songs;
+    const sorted = [...list];
+    if (sortMode === 'title') sorted.sort((a, b) => a.title.localeCompare(b.title, 'tr'));
+    else if (sortMode === 'artist') sorted.sort((a, b) => a.artist.localeCompare(b.artist, 'tr') || a.title.localeCompare(b.title, 'tr'));
+    else sorted.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return sorted;
+  })();
 
   // `?band=KOD` linkiyle açıldıysak ve bu gruba henüz katılınmadıysa,
   // paylaşım modalını "Katıl" sekmesiyle otomatik aç.
@@ -129,7 +147,7 @@ export const SongList: React.FC<SongListProps> = ({
         const data = JSON.parse(event.target?.result as string);
         if (data.id && data.name && Array.isArray(data.songs)) {
           onImportWorkspace(data);
-          alert(`"${data.name}" grubu başarıyla yüklendi!`);
+          alert(`"${data.name}" yedeği yeni bir grup olarak ("${data.name} (yedek)") eklendi. Mevcut gruplarınız değişmedi.`);
         } else {
           alert('Geçersiz grup JSON dosyası.');
         }
@@ -186,11 +204,13 @@ export const SongList: React.FC<SongListProps> = ({
     );
   };
 
+  // "Tümü" yalnızca ekranda görünen (aramaya uyan) şarkıları seçer / bırakır.
+  const allVisibleSelected = filteredSongs.length > 0 && filteredSongs.every(s => selectedSongIds.includes(s.id));
   const handleSelectAll = () => {
-    if (selectedSongIds.length === filteredSongs.length) {
-      setSelectedSongIds([]);
+    if (allVisibleSelected) {
+      setSelectedSongIds(prev => prev.filter(id => !filteredSongs.some(s => s.id === id)));
     } else {
-      setSelectedSongIds(filteredSongs.map(s => s.id));
+      setSelectedSongIds(prev => Array.from(new Set([...prev, ...filteredSongs.map(s => s.id)])));
     }
   };
 
@@ -364,6 +384,33 @@ export const SongList: React.FC<SongListProps> = ({
         </button>
 
         <div style={{ borderTop: '1px solid #27272a', marginTop: '16px', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <span style={{ fontSize: '11px', color: '#71717a', textTransform: 'uppercase', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Aktif Grup: {activeWs?.name}</span>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              onClick={onRenameWorkspace}
+              title="Grubun adını değiştir"
+              style={{ flex: 1, background: '#18181b', color: '#fff', border: '1px solid #27272a', padding: '8px 6px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}
+            >
+              <Pencil size={13} color="#38bdf8" /> Adı
+            </button>
+            <button
+              onClick={onLeaveWorkspace}
+              title="Grubu sadece bu cihazdan kaldır (grup silinmez)"
+              style={{ flex: 1, background: '#18181b', color: '#fff', border: '1px solid #27272a', padding: '8px 6px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}
+            >
+              <LogOut size={13} color="#fbbf24" /> Ayrıl
+            </button>
+            <button
+              onClick={onDeleteWorkspace}
+              title="Grubu herkes için kalıcı olarak sil"
+              style={{ flex: 1, background: '#18181b', color: '#ef4444', border: '1px solid #27272a', padding: '8px 6px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}
+            >
+              <Trash2 size={13} /> Sil
+            </button>
+          </div>
+        </div>
+
+        <div style={{ borderTop: '1px solid #27272a', marginTop: '12px', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <span style={{ fontSize: '11px', color: '#71717a', textTransform: 'uppercase', fontWeight: 'bold' }}>Yedekleme & Dosya</span>
           <button
             onClick={onExportWorkspace}
@@ -476,7 +523,7 @@ export const SongList: React.FC<SongListProps> = ({
               ref={docInputRef} 
               onChange={handleDocUpload} 
               multiple 
-              accept=".pdf,.docx,.txt,.cho,.chordpro,.pro,.chopro" 
+              accept=".docx,.txt,.cho,.chordpro,.pro,.chopro" 
               style={{ display: 'none' }} 
             />
 
@@ -495,9 +542,10 @@ export const SongList: React.FC<SongListProps> = ({
           </div>
         </div>
 
-        {/* Arşiv Genelinde Arama */}
+        {/* Arşiv Genelinde Arama ve Sıralama */}
         {songs.length > 0 && (
-          <div style={{ position: 'relative', marginBottom: '14px' }}>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: '180px' }}>
             <Search size={16} color="#71717a" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
             <input
               type="text"
@@ -525,6 +573,21 @@ export const SongList: React.FC<SongListProps> = ({
               </button>
             )}
           </div>
+          <select
+            value={sortMode}
+            onChange={e => {
+              const v = e.target.value as SortMode;
+              setSortMode(v);
+              try { localStorage.setItem('stage_song_sort', v); } catch { /* yoksay */ }
+            }}
+            title="Sıralama"
+            style={{ background: '#121216', border: '1px solid #27272a', color: '#fff', padding: '10px', borderRadius: '10px', fontSize: '13px' }}
+          >
+            <option value="title">A–Z (şarkı)</option>
+            <option value="artist">Sanatçı</option>
+            <option value="recent">Son düzenlenen</option>
+          </select>
+          </div>
         )}
 
         {/* Toplu Silme Barı */}
@@ -534,7 +597,7 @@ export const SongList: React.FC<SongListProps> = ({
               onClick={handleSelectAll}
               style={{ background: 'transparent', border: 'none', color: '#a1a1aa', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}
             >
-              {selectedSongIds.length === filteredSongs.length && filteredSongs.length > 0 ? (
+              {allVisibleSelected ? (
                 <CheckSquare size={16} color="#fbbf24" />
               ) : (
                 <Square size={16} />

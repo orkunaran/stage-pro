@@ -1,10 +1,11 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import type { Song } from '../../types/song';
 import { autoConvertTextToChordPro, convertChordsToGridNotation } from '../../utils/chordEngine';
 import { Save, ArrowLeft, Wand2, Rows3 } from 'lucide-react';
 
 interface SongEditorProps {
   song: Song;
+  isNew?: boolean;
   onSave: (updated: Song) => void;
   onCancel: () => void;
 }
@@ -24,7 +25,14 @@ const SCALE_OPTIONS = [
 
 const TIME_SIGNATURES = ['4/4', '3/4', '6/8', '2/4', '12/8', '5/8', '7/8', '9/8'];
 
-export const SongEditor: React.FC<SongEditorProps> = ({ song, onSave, onCancel }) => {
+export const SongEditor: React.FC<SongEditorProps> = ({ song, isNew = false, onSave, onCancel }) => {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   const [title, setTitle] = useState(song.title);
   const [artist, setArtist] = useState(song.artist);
   const [baseKey, setBaseKey] = useState(song.baseKey || 'Am');
@@ -95,28 +103,46 @@ export const SongEditor: React.FC<SongEditorProps> = ({ song, onSave, onCancel }
   return (
     <div style={{ height: '100vh', backgroundColor: '#0a0a0c', color: '#f3f4f6', display: 'flex', flexDirection: 'column' }}>
       {/* Üst Bar */}
-      <div style={{ background: '#121216', borderBottom: '1px solid #27272a', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ background: '#121216', borderBottom: '1px solid #27272a', padding: isMobile ? '10px 12px' : '16px 24px', paddingTop: isMobile ? 'max(10px, env(safe-area-inset-top))' : '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
         <button
           type="button"
-          onClick={onCancel}
-          style={{ background: '#27272a', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 'bold' }}
+          onClick={() => {
+            if (isNew && !confirm('Yeni şarkı kaydedilmeden kapatılsın mı?')) return;
+            onCancel();
+          }}
+          style={{ background: '#27272a', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 'bold', flexShrink: 0 }}
         >
           <ArrowLeft size={16} /> Vazgeç
         </button>
-        <h2 style={{ margin: 0, fontSize: '18px' }}>Şarkıyı Düzenle</h2>
+        <h2 style={{ margin: 0, fontSize: isMobile ? '15px' : '18px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {isNew ? 'Yeni Şarkı' : 'Şarkıyı Düzenle'}
+        </h2>
         <button
           type="button"
           onClick={handleSubmit}
-          style={{ background: '#059669', color: '#fff', border: 'none', padding: '8px 18px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 'bold' }}
+          style={{ background: '#059669', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 'bold', flexShrink: 0 }}
         >
           <Save size={16} /> Kaydet
         </button>
       </div>
 
       {/* Form Alanı */}
-      <form onSubmit={handleSubmit} style={{ flex: 1, display: 'flex', gap: '20px', padding: '24px', overflow: 'hidden' }}>
+      {/* Telefonda alt alta, masaüstünde yan yana */}
+      <form
+        onSubmit={handleSubmit}
+        style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: isMobile ? 'column' : 'row',
+          gap: isMobile ? '12px' : '20px',
+          padding: isMobile ? '12px' : '24px',
+          paddingBottom: isMobile ? 'max(12px, env(safe-area-inset-bottom))' : '24px',
+          overflowY: isMobile ? 'auto' : 'hidden',
+          minHeight: 0,
+        }}
+      >
         {/* Sol Panel: Meta Bilgiler */}
-        <div style={{ width: '320px', display: 'flex', flexDirection: 'column', gap: '16px', background: '#121216', padding: '20px', borderRadius: '12px', border: '1px solid #27272a' }}>
+        <div style={{ width: isMobile ? '100%' : '320px', boxSizing: 'border-box', flexShrink: 0, display: isMobile ? 'grid' : 'flex', gridTemplateColumns: isMobile ? '1fr 1fr' : undefined, flexDirection: 'column', gap: isMobile ? '10px' : '16px', background: '#121216', padding: isMobile ? '12px' : '20px', borderRadius: '12px', border: '1px solid #27272a' }}>
           <div>
             <label style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 'bold' }}>Şarkı Adı</label>
             <input
@@ -137,7 +163,7 @@ export const SongEditor: React.FC<SongEditorProps> = ({ song, onSave, onCancel }
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', gridColumn: isMobile ? '1 / -1' : undefined }}>
             <div>
               <label style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 'bold' }}>Kök Ton</label>
               <input
@@ -190,7 +216,7 @@ export const SongEditor: React.FC<SongEditorProps> = ({ song, onSave, onCancel }
         </div>
 
         {/* Sağ Panel: Şarkı İçeriği ve Akıllı Format Butonu */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#121216', padding: '20px', borderRadius: '12px', border: '1px solid #27272a' }}>
+        <div style={{ flex: isMobile ? 'none' : 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: '#121216', padding: isMobile ? '12px' : '20px', borderRadius: '12px', border: '1px solid #27272a' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
             <label style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 'bold' }}>
               Şarkı İçeriği (ChordPro Formatı)
@@ -214,9 +240,9 @@ export const SongEditor: React.FC<SongEditorProps> = ({ song, onSave, onCancel }
                   gap: '6px',
                   boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
                 }}
-                title="Düz yazılmış akorları otomatik olarak [Akor] içine alır"
+                title="Sadece akor içeren satırları [Akor] biçimine çevirir; akor satırı + altındaki söz satırını sütun hizasıyla birleştirir"
               >
-                <Wand2 size={15} /> Akorları Otomatik [ ] İçine Al
+                <Wand2 size={15} /> Akorları [ ] İçine Al
               </button>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#18181b', border: '1px solid #3f3f46', borderRadius: '8px', padding: '4px 4px 4px 10px' }}>
@@ -270,11 +296,12 @@ export const SongEditor: React.FC<SongEditorProps> = ({ song, onSave, onCancel }
             placeholder="Örn: | Gm Am C Bbmaj7 / | x 2 yazıp yukarıdaki 'Akorları Otomatik [ ] İçine Al' butonuna basabilirsiniz."
             style={{
               flex: 1,
+              minHeight: isMobile ? '55vh' : 0,
               background: '#0a0a0c',
               border: '1px solid #3f3f46',
               color: '#f3f4f6',
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-              fontSize: '15px',
+              fontSize: isMobile ? '16px' : '15px', // 16px: iOS odaklanınca sayfayı büyütmesin
               lineHeight: 1.6,
               padding: '16px',
               borderRadius: '8px',

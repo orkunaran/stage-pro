@@ -1,4 +1,5 @@
 import mammoth from 'mammoth';
+import { autoConvertTextToChordPro } from './chordEngine';
 
 export async function parseDocumentToSong(file: File): Promise<{ title: string; artist: string; baseKey: string; rawChordPro: string } | null> {
   const extension = file.name.split('.').pop()?.toLowerCase();
@@ -17,8 +18,16 @@ export async function parseDocumentToSong(file: File): Promise<{ title: string; 
   ) {
     text = await file.text();
   } else {
-    alert('Geçersiz dosya formatı. Lütfen DOCX, TXT veya ChordPro dosyası seçin.');
+    alert(`"${file.name}" yüklenemedi. Desteklenen biçimler: DOCX, TXT ve ChordPro (.cho, .chordpro, .pro). PDF için metni kopyalayıp yeni şarkıya yapıştırabilirsiniz.`);
     return null;
+  }
+
+  text = text.replace(/\r\n?/g, '\n');
+
+  // Köşeli parantezli akor yoksa metin muhtemelen "akor satırı + söz satırı"
+  // düzenindedir (internetten kopyalanmış). Otomatik ChordPro'ya çevir.
+  if (!/\[[^\]]+\]/.test(text)) {
+    text = autoConvertTextToChordPro(text);
   }
 
   const cleanTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
@@ -34,10 +43,5 @@ export async function parseDocumentToSong(file: File): Promise<{ title: string; 
   if (artistMatch) artist = artistMatch[1].trim();
   if (keyMatch) baseKey = keyMatch[1].trim();
 
-  return {
-    title,
-    artist,
-    baseKey,
-    rawChordPro: text,
-  };
+  return { title, artist, baseKey, rawChordPro: text };
 }
